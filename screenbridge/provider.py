@@ -2,8 +2,13 @@ import asyncio
 import base64
 import ipaddress
 import json
+import math
 import os
+import random
+import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit
 
 import httpx
@@ -51,6 +56,90 @@ class Settings:
 
 class ProviderError(Exception):
     pass
+
+
+def rate_error_kind(response):
+    try:
+        error = response.json().get("error", {})
+    except (ValueError, AttributeError):
+        error = {}
+    if not isinstance(error, dict):
+        return "unknown"
+    labels = [error.get("code"), error.get("type")]
+    if any(
+        label in {"insufficient_quota", "billing_hard_limit_reached", "billing_not_active"}
+        for label in labels
+        if isinstance(label, str)
+    ):
+        return "quota"
+    message = error.get("message", "")
+    message = message.lower() if isinstance(message, str) else ""
+    # Inspect known indicators, but never show arbitrary provider text or credentials.
+    if "request too large" in message:
+        return "oversized"
+    if "rate_limit_exceeded" in labels or "rate limit reached" in message:
+        return "rate"
+    return "unknown"
+
+
+def retry_delay(response, fallback):
+    waits = []
+    for name, scale in [("retry-after", 1), ("retry-after-ms", 0.001)]:
+        value = response.headers.get(name)
+        if not value:
+            continue
+        try:
+            delay = float(value) * scale
+        except ValueError:
+            try:
+                date = parsedate_to_datetime(value)
+                if date.tzinfo is None:
+                    date = date.replace(tzinfo=UTC)
+                delay = (date - datetime.now(UTC)).total_seconds()
+            except (ValueError, TypeError, OverflowError):
+                continue
+        if math.isfinite(delay):
+            waits.append(max(0, delay))
+    if not waits:
+        for name in ["x-ratelimit-reset-requests", "x-ratelimit-reset-tokens"]:
+            value = response.headers.get(name, "")
+            parts = re.findall(r"(\d+(?:\.\d+)?)(ms|s|m|h)", value)
+            if not parts or "".join(number + unit for number, unit in parts) != value:
+                continue
+            seconds = sum(
+                float(number) * {"ms": 0.001, "s": 1, "m": 60, "h": 3600}[unit]
+                for number, unit in parts
+            )
+            if math.isfinite(seconds):
+                waits.append(seconds)
+    return max(waits, default=fallback)
+
+
+def rate_error_message(response, retries=0):
+    kind = rate_error_kind(response)
+    if kind == "quota":
+        return (
+            "AI 服务返回 429：API 额度不足或 API 计费不可用（insufficient_quota / billing）。"
+            "请检查开发者平台 Billing 的余额与计费状态；ChatGPT 会员不等于 API 额度。"
+            "此类错误不会自动重试。"
+        )
+    if kind == "oversized":
+        return (
+            "AI 服务返回 429：单次请求超过当前模型的 token 限额。"
+            "请在开发者平台 Limits 检查该模型限额，缩小题图或调整模型配置；等待不能解决单次超限。"
+        )
+    if kind == "rate":
+        delay = math.ceil(retry_delay(response, 4))
+        attempts = f"已自动重试 {retries} 次。" if retries else ""
+        return (
+            f"AI 服务返回 429：请求频率或每分钟 token 数达到限额（rate_limit_exceeded）。"
+            f"{attempts}建议至少等待 {delay} 秒后重试，先选择一个模型并关闭综合建议；"
+            "也可在开发者平台 Limits 检查该模型限额。"
+        )
+    return (
+        "AI 服务返回 429：服务未提供可识别的错误代码，尚不能区分额度不足与限流。"
+        "请分别检查开发者平台 Billing 和 Limits；未自动重试。"
+    )
 
 
 class AIProvider:
@@ -109,11 +198,18 @@ class AIProvider:
         try:
             timeout = 240 if official and reasoning else 90
             async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=15)) as client:
-                response = await client.post(
-                    self.settings.base_url + "/chat/completions",
-                    headers={"Authorization": "Bearer " + self.settings.api_key},
-                    json=payload,
-                )
+                for attempt in range(3):
+                    response = await client.post(
+                        self.settings.base_url + "/chat/completions",
+                        headers={"Authorization": "Bearer " + self.settings.api_key},
+                        json=payload,
+                    )
+                    if response.status_code != 429:
+                        break
+                    delay = retry_delay(response, 2 ** (attempt + 1))
+                    if rate_error_kind(response) != "rate" or attempt == 2 or delay > 20:
+                        raise ProviderError(rate_error_message(response, attempt))
+                    await asyncio.sleep(delay + random.uniform(0, 0.3))
                 response.raise_for_status()
                 choice = response.json()["choices"][0]
                 content = choice["message"]["content"]
@@ -128,7 +224,7 @@ class AIProvider:
             raise ProviderError("AI 请求超时，请检查网络或稍后重试。") from exc
         except httpx.HTTPStatusError as exc:
             code = exc.response.status_code
-            hints = {401: "API Key 无效", 403: "没有模型访问权限", 429: "额度不足或请求过于频繁"}
+            hints = {401: "API Key 无效", 403: "没有模型访问权限"}
             raise ProviderError(
                 f"AI 服务返回 {code}：{hints.get(code, '请检查模型和接口配置')}。"
             ) from exc

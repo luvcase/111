@@ -91,6 +91,17 @@ INTERVIEW_AI_MODEL=gpt-4.1-mini
 
 原图、缩略图、复盘和模型配置存放在 `.runtime/workspace.sqlite3`；其中模型密钥是服务器本地保存的值，数据库没有应用层加密，不要分享 `.runtime`。`.env`、会话、数据库与二维码均已被 Git 忽略。默认每次服务启动更新设备配对令牌，账号会话可跨重启使用；设置至少 24 字符的 `INTERVIEW_PAIR_TOKEN` 可固定设备配对。
 
+## API 返回 429 时
+
+先看软件显示的错误类型：
+
+- **insufficient_quota / billing**：API 额度不足、计费未启用或计费限额已达到。检查 [API Billing](https://platform.openai.com/settings/organization/billing/overview) 的余额与计费状态；ChatGPT 会员不包含 API 调用额度。此类错误不自动重试。
+- **rate_limit_exceeded**：请求频率或每分钟 token 限额达到。软件按服务返回的等待时间最多自动重试 2 次；需要等待超过 20 秒时会提示手动等待。先选一个模型、关闭综合建议，并检查 [Limits](https://platform.openai.com/settings/organization/limits)。
+- **单次请求超过限额**：需要缩小输入或调整模型的请求预算、使用限额；等待不改变单次请求大小。
+- **未提供可识别代码**：无法仅凭 429 判断原因，不会盲目重试；分别检查 Billing 和 Limits。
+
+升级软件只能改进错误提示与限流处理，不能增加 API 账户余额或权限。充值或开通 API 计费后，再测试连接并上传题图验证。密钥只在软件内填写，不要发送到聊天或分享数据文件夹。
+
 ## 开发与验证
 
 Windows 开发机可运行 `uv run --no-sync screenbridge-app` 打开桌面启动窗口。构建应用包：
