@@ -240,7 +240,14 @@ def package_smoke(result_path, native=None):
     result = {"ok": False, "native_checked": False}
     controller = None
     temporary = None
+
+    def checkpoint(stage):
+        result["stage"] = stage
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+
     try:
+        checkpoint("initializing_tk")
         import tkinter as tk
 
         native = sys.platform == "win32" if native is None else native
@@ -251,7 +258,9 @@ def package_smoke(result_path, native=None):
             root.destroy()
         temporary = tempfile.TemporaryDirectory(prefix="screenbridge-package-")
         controller = RuntimeController(Path(temporary.name), demo=True, port=0)
+        checkpoint("starting_runtime")
         controller.start(native=native)
+        checkpoint("checking_capture")
         headers = {"Authorization": "Bearer " + controller.token}
         with httpx.Client(timeout=5, trust_env=False) as client:
             page = client.get(controller.base_url + "/")
@@ -294,14 +303,16 @@ def package_smoke(result_path, native=None):
             )
         controller.stop()
         controller = None
+        checkpoint("complete")
     except Exception as exc:
         result["error"] = str(exc)
         if controller:
-            log_file = controller.directory / "desktop.log"
-            if log_file.exists():
-                result["native_log"] = log_file.read_text(encoding="utf-8", errors="replace")[
-                    -5000:
-                ]
+            for filename in ("desktop.log", "native-startup-error.log"):
+                log_file = controller.directory / filename
+                if log_file.exists():
+                    result[filename] = log_file.read_text(encoding="utf-8", errors="replace")[
+                        -5000:
+                    ]
     finally:
         if controller:
             try:
