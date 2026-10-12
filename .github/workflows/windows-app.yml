@@ -4,7 +4,7 @@ on:
     branches: [main]
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
   build:
     runs-on: windows-latest
@@ -73,3 +73,25 @@ jobs:
             Get-Content 'build/packaged-smoke.json' -Raw >> $env:GITHUB_STEP_SUMMARY
             '```' >> $env:GITHUB_STEP_SUMMARY
           }
+      - name: Record package build result
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path build | Out-Null
+          $smoke = @{ ok = $false; error = 'Build did not complete package smoke' }
+          if (Test-Path 'build/packaged-smoke.json') {
+            $smoke = Get-Content 'build/packaged-smoke.json' -Raw | ConvertFrom-Json
+          }
+          $report = @{
+            source = '${{ github.sha }}'
+            run = '${{ github.run_id }}'
+            artifact_url = '${{ steps.application.outputs.artifact-url }}'
+            smoke = $smoke
+          }
+          $report | ConvertTo-Json -Depth 8 | Set-Content 'build/app-build-report.json' -Encoding utf8
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          $reportTag = 'app-build-report-${{ github.run_id }}-${{ github.run_attempt }}'
+          git tag -a $reportTag -F 'build/app-build-report.json'
+          git push origin "refs/tags/$reportTag"
