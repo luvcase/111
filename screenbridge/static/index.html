@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f3f7f5">
+  <title>ScreenBridge · 答案接收端</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header><div class="brand"><span class="logo">S</span><div><strong>ScreenBridge</strong><small>截图 · 解答 · 同步</small></div></div><span id="connection" class="status">未连接</span></header>
+    <section id="pairing" class="card">
+      <div class="eyebrow">连接你的电脑</div>
+      <h1>答案，随手可见。</h1>
+      <p>与电脑连接同一 Wi-Fi，扫描电脑生成的二维码，或输入配对令牌。</p>
+      <form id="pair-form"><label for="token">配对令牌</label><input id="token" type="password" autocomplete="off" placeholder="从电脑端 .runtime/pair-token.txt 获取" required minlength="24"><button type="submit">连接设备 <span>↗</span></button></form>
+      <p id="pair-error" class="error" role="alert"></p>
+    </section>
+    <div id="workspace" hidden>
+      <section class="intro"><div class="eyebrow">你的解题工作台</div><h1>从截图到思路。</h1><p id="provider-status">正在读取模型配置…</p></section>
+      <div id="demo-banner" class="notice" hidden>演示模式：仅验证设备传输，结果不是图片识别或真实 AI 答案。</div>
+      <section class="toolbar card">
+        <div><label for="mode">回答方式</label><select id="mode"><option value="concise">简明答案</option><option value="explain">详细解析</option><option value="code">编程题</option></select></div>
+        <label class="upload-button" for="image-input">上传题目 <span>＋</span></label><input id="image-input" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+        <p id="upload-status" class="upload-status" role="status">电脑端按 Ctrl + Alt + S 截图发送</p>
+      </section>
+      <section class="feed-header"><h2>解答记录</h2><span id="job-count">0 条</span></section>
+      <div id="empty" class="empty card"><span class="empty-icon">▧</span><h2>等待第一张截图</h2><p>保持此页面打开，新解答会自动出现。<br>也可以上传图片，立即开始。</p></div>
+      <div id="jobs" aria-live="polite"></div>
+      <footer><span>仅保留本次服务运行的最近 30 条记录</span><button id="disconnect" class="text-button">断开配对</button></footer>
+    </div>
+  </main>
+</body>
+</html>
