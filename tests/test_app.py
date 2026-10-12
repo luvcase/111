@@ -31,7 +31,9 @@ def test_upload_push_and_reconnect():
     with TestClient(app) as client:
         with client.websocket_connect("/ws") as socket:
             socket.send_json({"token": TOKEN})
-            assert socket.receive_json() == {"type": "snapshot", "jobs": []}
+            snapshot = socket.receive_json()
+            assert snapshot["type"] == "snapshot"
+            assert snapshot["jobs"] == []
             response = client.post(
                 "/api/screenshots",
                 headers=HEADERS,
@@ -39,7 +41,11 @@ def test_upload_push_and_reconnect():
                 data={"mode": "code"},
             )
             assert response.status_code == 202
-            statuses = [socket.receive_json()["job"]["status"] for _ in range(3)]
+            statuses = []
+            while not statuses or statuses[-1] != "done":
+                event = socket.receive_json()
+                if event["type"] == "job":
+                    statuses.append(event["job"]["status"])
             assert statuses == ["queued", "processing", "done"]
         with client.websocket_connect("/ws") as socket:
             socket.send_json({"token": TOKEN})

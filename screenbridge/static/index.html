@@ -1,36 +1,37 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#f3f7f5">
-  <title>ScreenBridge · 答案接收端</title>
-  <link rel="stylesheet" href="/static/style.css">
-  <script src="/static/app.js" defer></script>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f3f7f5"><title>ScreenBridge · 题目复盘工作台</title>
+<link rel="stylesheet" href="/static/style.css"><script src="/static/app.js" defer></script>
 </head>
 <body>
-  <main>
-    <header><div class="brand"><span class="logo">S</span><div><strong>ScreenBridge</strong><small>截图 · 解答 · 同步</small></div></div><span id="connection" class="status">未连接</span></header>
-    <section id="pairing" class="card">
-      <div class="eyebrow">连接你的电脑</div>
-      <h1>答案，随手可见。</h1>
-      <p>与电脑连接同一 Wi-Fi，扫描电脑生成的二维码，或输入配对令牌。</p>
-      <form id="pair-form"><label for="token">配对令牌</label><input id="token" type="password" autocomplete="off" placeholder="从电脑端 .runtime/pair-token.txt 获取" required minlength="24"><button type="submit">连接设备 <span>↗</span></button></form>
-      <p id="pair-error" class="error" role="alert"></p>
-    </section>
-    <div id="workspace" hidden>
-      <section class="intro"><div class="eyebrow">你的解题工作台</div><h1>从截图到思路。</h1><p id="provider-status">正在读取模型配置…</p></section>
-      <div id="demo-banner" class="notice" hidden>演示模式：仅验证设备传输，结果不是图片识别或真实 AI 答案。</div>
-      <section class="toolbar card">
-        <div><label for="mode">回答方式</label><select id="mode"><option value="concise">简明答案</option><option value="explain">详细解析</option><option value="code">编程题</option></select></div>
-        <label class="upload-button" for="image-input">上传题目 <span>＋</span></label><input id="image-input" type="file" accept="image/png,image/jpeg,image/webp" hidden>
-        <p id="upload-status" class="upload-status" role="status">电脑端按 Ctrl + Alt + S 截图发送</p>
-      </section>
-      <section class="feed-header"><h2>解答记录</h2><span id="job-count">0 条</span></section>
-      <div id="empty" class="empty card"><span class="empty-icon">▧</span><h2>等待第一张截图</h2><p>保持此页面打开，新解答会自动出现。<br>也可以上传图片，立即开始。</p></div>
-      <div id="jobs" aria-live="polite"></div>
-      <footer><span>仅保留本次服务运行的最近 30 条记录</span><button id="disconnect" class="text-button">断开配对</button></footer>
-    </div>
-  </main>
-</body>
-</html>
+<main>
+<header><div class="brand"><span class="logo">S</span><div><strong>ScreenBridge</strong><small>截图 · 对照 · 复盘</small></div></div><div class="header-actions"><button id="account-button" class="text-button">账号登录</button><span id="connection" class="status">未连接</span></div></header>
+<section id="pairing" class="card pairing-card"><div class="eyebrow">连接你的工作台</div><h1>让每道题，都有思路。</h1><p>电脑、网页与手机登录同一账号，或在同一 Wi-Fi 下扫描配对二维码。</p><form id="pair-form"><label for="token">设备配对令牌</label><input id="token" type="password" required minlength="24" autocomplete="off" placeholder="从电脑生成的二维码或配对文件获取"><button type="submit">连接设备 ↗</button></form><p id="pair-error" class="error" role="alert"></p><button id="login-from-pair" class="text-button">已有账号？直接登录</button></section>
+<div id="workspace" hidden>
+<section class="intro"><div><div class="eyebrow">你的题目复盘工作台</div><h1>从题图，到清晰解答。</h1><p id="provider-status">正在读取配置…</p></div><span class="intro-tag">视觉模型直接分析</span></section>
+<div id="demo-banner" class="notice" hidden>演示模式：未识别题图、未调用真实 AI，结果仅用于验证传输与界面。</div>
+<div class="workbench">
+<div class="controls">
+<section class="card input-card"><div class="section-heading"><h2>01 <span>题目输入</span></h2><span class="mini">图片 / 文字</span></div>
+<div class="capture-actions"><button id="capture-region" class="secondary">▧ 区域截图</button><button id="capture-full" class="secondary">▣ 全屏截图</button><label for="image-input" class="upload-button">＋ 导入题图</label><input id="image-input" type="file" accept="image/png,image/jpeg,image/webp" hidden></div>
+<p class="hint">快捷键：Ctrl + Alt + A 选区 · Ctrl + Alt + S 全屏</p>
+<label class="check"><input id="right-hold" type="checkbox">开启右键长按 0.6 秒拖动选区</label>
+<div id="preview-empty" class="preview-empty">▧<span>截图或导入图片，直接交给视觉模型</span></div><img id="image-preview" alt="当前题图预览" hidden>
+<div class="image-tools"><button id="crop-image" class="text-button" disabled>裁剪题图</button><button id="clear-image" class="text-button" disabled>清除题图</button></div>
+<label for="question">题干 / 补充条件</label><textarea id="question" rows="5" maxlength="20000" placeholder="可直接分析题图，无需手动复制。也可以输入文字题目或先进行 OCR。"></textarea>
+<div class="two-fields"><div><label for="question-type">题型</label><select id="question-type"><option value="auto">自动识别</option><option value="choice">选择题</option><option value="visual">图形题</option><option value="code">编程题</option><option value="math">数学题</option></select></div><div><label for="mode">提示词风格</label><select id="mode"><option value="concise">速答</option><option value="explain">详细解析</option><option value="code">编程题</option><option value="choice">选项分析</option><option value="visual">图形推理</option></select></div></div>
+<div class="action-row"><button id="ocr" class="secondary">OCR 转文字</button><button id="analyze">生成解答 ↗</button></div><p id="upload-status" role="status" class="upload-status">等待题图或文字输入</p></section>
+<section class="card"><div class="section-heading"><h2>02 <span>模型与提示词</span></h2><button id="new-model" class="text-button">＋ 新配置</button></div><p class="hint">选择 1–3 套配置，并行对照不同模型的思路。</p><div id="model-list"></div><label class="check"><input id="collaborate" type="checkbox">生成综合建议（额外调用第一个选定模型）</label><label for="prompt-library">提示词风格库</label><select id="prompt-library"><option value="">自定义 / 无附加提示词</option></select><textarea id="prompt" rows="3" maxlength="4000" placeholder="例如：先列答案，再说明排除其他选项的依据。"></textarea><button id="save-prompt" class="text-button">保存到我的提示词库</button><p id="settings-status" class="hint" role="status"></p></section>
+<section class="card"><div class="section-heading"><h2>03 <span>复盘记录</span></h2><span id="job-count" class="mini">0 条</span></div><div id="history-list"></div></section>
+</div>
+<div class="results-panel"><div class="feed-header"><h2>当前复盘 · 多模型对照</h2><span id="sync-label">实时同步</span></div><div id="empty" class="empty card"><span class="empty-icon">▧</span><h2>准备好第一道题</h2><p>导入题图，选择模型，生成解答。<br>答案、关键步骤和注意事项会在这里呈现。</p></div><div id="jobs" aria-live="polite"></div></div>
+</div>
+<footer><span>复盘内容保存在本机服务端 · 同账号跨设备同步</span><button id="link-desktop" class="text-button">绑定本机截图客户端</button><button id="disconnect" class="text-button">退出 / 断开</button></footer>
+</div>
+</main>
+<dialog id="model-dialog"><form id="model-form"><div class="section-heading"><h2>模型配置</h2><button type="button" class="close-dialog text-button">✕</button></div><input id="model-id" type="hidden"><label for="model-name">配置名称</label><input id="model-name" required maxlength="60" placeholder="例如：OpenAI 快速分析"><label for="model-url">HTTPS API 地址</label><input id="model-url" type="url" required value="https://api.openai.com/v1"><label for="model-name-api">模型名称</label><input id="model-name-api" required maxlength="100" value="gpt-4.1-mini"><label for="model-key">API Key（留空保留已有密钥）</label><input id="model-key" type="password" autocomplete="new-password" placeholder="只保存在本机服务端，不返回浏览器"><p class="hint">需要支持图片输入的 Chat Completions 接口。</p><button type="submit">保存配置</button><p id="model-error" class="error" role="alert"></p></form></dialog>
+<dialog id="account-dialog"><form id="account-form"><div class="section-heading"><h2>账号同步</h2><button type="button" class="close-dialog text-button">✕</button></div><p>在连接同一服务的电脑、网页和手机上登录相同账号，即可查看同一份复盘记录。</p><label for="username">账号（英文、数字、_.@-）</label><input id="username" autocomplete="username" required minlength="3" maxlength="60"><label for="password">密码（至少 10 位）</label><input id="password" type="password" autocomplete="current-password" required minlength="10" maxlength="128"><div class="action-row"><button type="submit" name="action" value="login">登录</button><button type="submit" name="action" value="register" class="secondary">注册新账号</button></div><p class="hint">注册需先配对设备。账号空间与设备空间分别保存记录。</p><p id="account-error" class="error" role="alert"></p></form></dialog>
+<dialog id="crop-dialog"><div class="section-heading"><h2>拖动裁剪 · Esc 取消</h2><button type="button" class="close-dialog text-button">✕</button></div><canvas id="crop-canvas"></canvas><p class="hint">拖动后松开，选区会替换当前题图；原始复盘记录不变。</p></dialog>
+</body></html>

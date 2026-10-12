@@ -68,7 +68,9 @@ def main():
     desktop.add_argument("--token-file", type=Path, default=Path.cwd() / ".runtime/pair-token.txt")
     desktop.add_argument("--hotkey", default="<ctrl>+<alt>+s")
     desktop.add_argument("--monitor", type=int, default=1)
-    desktop.add_argument("--mode", choices=list(MODES), default="concise")
+    desktop.add_argument("--mode", choices=list(MODES), default=None)
+    desktop.add_argument("--region-hotkey", default="<ctrl>+<alt>+a")
+    desktop.add_argument("--login", action="store_true", help="使用工作台账号登录截图客户端")
     wait = sub.add_parser("wait", help="等待服务启动并验证本机配对令牌")
     wait.add_argument("--server", default="http://127.0.0.1:8765")
     wait.add_argument("--token-file", type=Path, default=Path.cwd() / ".runtime/pair-token.txt")
@@ -77,10 +79,8 @@ def main():
 
     if args.command == "serve":
         settings = Settings.from_env(demo=args.demo)
-        if not settings.demo and not settings.api_key:
-            parser.error("请在 .env 配置 INTERVIEW_AI_KEY，或使用 serve --demo 验证传输")
         token = os.getenv("INTERVIEW_PAIR_TOKEN") or secrets.token_urlsafe(24)
-        app = create_app(settings, token)
+        app = create_app(settings, token, data_dir=args.runtime_dir)
         config = uvicorn.Config(
             app, host=args.host, port=args.port, access_log=False, timeout_graceful_shutdown=3
         )
@@ -117,7 +117,29 @@ def main():
             else getpass.getpass("配对令牌：")
         )
         try:
-            run_desktop(args.server, token, args.hotkey, args.monitor, args.mode)
+            if args.login:
+                username = input("账号：").strip()
+                password = getpass.getpass("密码：")
+                with httpx.Client(timeout=15, trust_env=False) as client:
+                    response = client.post(
+                        args.server.rstrip("/") + "/api/auth/login",
+                        json={"username": username, "password": password},
+                    )
+                    response.raise_for_status()
+                    token = response.json()["token"]
+                session_path = args.token_file.parent / "desktop-session.txt"
+                fd = os.open(session_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, "w") as file:
+                    file.write(token)
+            run_desktop(
+                args.server,
+                token,
+                args.hotkey,
+                args.monitor,
+                args.mode,
+                args.region_hotkey,
+                args.token_file.parent / "desktop-session.txt",
+            )
         except ImportError:
             parser.error("缺少桌面依赖，请运行 uv sync --extra desktop")
         except Exception as exc:
