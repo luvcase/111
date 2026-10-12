@@ -36,6 +36,11 @@ def data_directory():
 
 def redirect_windowed_logs(directory, name):
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # Child processes can receive real stdout handles using a non-Chinese Windows locale.
+    # Normalize those handles too; windowed executables do not always expose None streams.
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
     if sys.stdout is None or sys.stderr is None:
         log = (directory / name).open("a", encoding="utf-8", buffering=1)
         if sys.stdout is None:

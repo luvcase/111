@@ -1,8 +1,15 @@
+import io
 import json
 
 import httpx
 
-from screenbridge.launcher import AppLock, RuntimeController, child_command, package_smoke
+from screenbridge.launcher import (
+    AppLock,
+    RuntimeController,
+    child_command,
+    package_smoke,
+    redirect_windowed_logs,
+)
 
 
 def test_app_lock_prevents_two_instances(tmp_path):
@@ -80,3 +87,14 @@ def test_package_smoke_cleans_up_failed_start(monkeypatch, tmp_path):
     assert package_smoke(result_file, native=False) == 1
     result = json.loads(result_file.read_text())
     assert result["error"] == "startup-check-failed" and not result["ok"]
+
+
+def test_native_child_logs_chinese_on_non_chinese_windows_locale(monkeypatch, tmp_path):
+    buffer = io.BytesIO()
+    stream = io.TextIOWrapper(buffer, encoding="cp1252")
+    monkeypatch.setattr("screenbridge.launcher.sys.stdout", stream)
+    monkeypatch.setattr("screenbridge.launcher.sys.stderr", stream)
+    redirect_windowed_logs(tmp_path, "desktop.log")
+    stream.write("全屏截图已连接。")
+    stream.flush()
+    assert buffer.getvalue().decode("utf-8") == "全屏截图已连接。"
