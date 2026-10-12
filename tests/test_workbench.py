@@ -261,7 +261,7 @@ async def test_real_connection_test_contract(monkeypatch):
     def handler(request):
         body = json.loads(request.content)
         assert body["model"] == "vision-test"
-        assert body["max_tokens"] == 16
+        assert body["max_completion_tokens"] == 16
         return httpx.Response(200, json={"choices": [{"message": {"content": "OK"}}]})
 
     original = httpx.AsyncClient

@@ -77,6 +77,10 @@ uv run --no-sync screenbridge serve --phone-host 192.168.1.10
 
 ## OpenAI 与兼容服务
 
+API Key 在 [OpenAI 开发者平台](https://platform.openai.com/api-keys) 点击 **Create new secret key** 创建，只在软件模型配置里填写。API 计费与 ChatGPT 会员分开；忘记完整 Key 时需创建新 Key。
+
+OpenAI 官方 SDK 当前列出的型号包含 `gpt-6-astra` 与 `gpt-6.1-sol`；不要把它们合写成 `gpt-6.1-astra`。在“模型名称”填写账号实际可用的模型 ID，再测试连接并上传题图验证图片能力。软件对 OpenAI 官方接口使用 `max_completion_tokens`，并为 GPT-5/6 推理留出输出预算；兼容服务仍保留其常见的 `max_tokens` 参数。模型可用性、图片能力与实际质量需要你的 Key 验证，SDK 中列出型号并不代表每个账号均有权限。
+
 ```dotenv
 INTERVIEW_AI_KEY=你的密钥
 INTERVIEW_AI_BASE_URL=https://api.openai.com/v1

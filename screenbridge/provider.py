@@ -97,16 +97,31 @@ class AIProvider:
     async def complete(self, payload):
         if not self.settings.api_key:
             raise ProviderError("此模型未配置 API Key，请编辑模型配置。")
+        payload = dict(payload)
+        official = urlsplit(self.settings.base_url).hostname == "api.openai.com"
+        reasoning = self.settings.model.startswith(("gpt-5", "gpt-6", "o1", "o3", "o4"))
+        if official and "max_tokens" in payload:
+            budget = payload.pop("max_tokens")
+            if reasoning:
+                # The modern limit includes reasoning tokens, not just the visible answer.
+                budget = max(budget, 1024 if budget <= 16 else 8192)
+            payload["max_completion_tokens"] = budget
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(90, connect=15)) as client:
+            timeout = 240 if official and reasoning else 90
+            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=15)) as client:
                 response = await client.post(
                     self.settings.base_url + "/chat/completions",
                     headers={"Authorization": "Bearer " + self.settings.api_key},
                     json=payload,
                 )
                 response.raise_for_status()
-                content = response.json()["choices"][0]["message"]["content"]
+                choice = response.json()["choices"][0]
+                content = choice["message"]["content"]
                 if not isinstance(content, str) or not content.strip():
+                    if choice.get("finish_reason") == "length":
+                        raise ProviderError(
+                            "模型已连接，但推理或输出达到本次预算；请减少题图范围或简化题目。"
+                        )
                     raise ValueError("empty answer")
                 return content.strip()
         except httpx.TimeoutException as exc:
