@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "screenbridge"
-version = "0.2.0"
+version = "0.3.0"
 description = "Screenshot-to-AI relay with a mobile result screen"
 requires-python = ">=3.11"
 dependencies = [
@@ -19,10 +19,12 @@ dependencies = [
 
 [project.optional-dependencies]
 desktop = ["mss>=10,<11", "pynput>=1.8,<2"]
+build = ["pyinstaller>=6.16,<7"]
 dev = ["pytest>=8,<10", "pytest-asyncio>=0.25,<2", "playwright>=1.50,<2", "ruff>=0.11,<1"]
 
 [project.scripts]
 screenbridge = "screenbridge.cli:main"
+screenbridge-app = "screenbridge.launcher:main"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

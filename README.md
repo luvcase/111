@@ -2,6 +2,20 @@
 
 Windows 截图与题目复盘工作台：题图直接交给视觉模型，电脑、网页和手机查看同一份复盘内容。
 
+## 普通使用：Windows 应用版，不用安装 Python
+
+1. 打开 [Windows 应用打包页面](https://github.com/luvcase/111/actions/workflows/windows-app.yml)，点击最新的绿色成功记录。
+2. 在页面下方 **Artifacts** 下载 **ScreenBridge-Windows-app**。这才是应用包；仓库 **Code → Download ZIP** 下载的是源码。
+3. 解压所有文件，双击 **ScreenBridge.exe**。保留旁边的 `_internal` 文件夹，软件会自动启动并打开工作台。
+4. 在“模型与提示词”编辑默认配置，填写自己的 OpenAI Key，保存并测试连接。
+5. 用 **Ctrl + Alt + A** 选区截图，或 **Ctrl + Alt + S** 全屏截图；也可导入题图。手机与电脑连接同一 Wi-Fi，在应用启动窗口点击“手机配对二维码”扫码。
+
+应用版自带 Python 运行环境，不需要安装 Python、uv，也不需要运行 bat 脚本。关闭浏览器页面不会停止软件；从启动窗口选择“退出软件”。演示模式只验证界面与传输。
+
+应用版数据保存在 `%LOCALAPPDATA%\ScreenBridge`，源码版数据在 `.runtime/`。应用包未做代码签名，Windows 首次打开可能显示未知发布者提示。Windows 10/11 64 位为目标平台。
+
+以下 Python 安装与命令行说明面向源码开发；如果你只是使用软件，可以跳过。
+
 ## 功能
 
 - **截图**：Ctrl + Alt + S 全屏、Ctrl + Alt + A 区域选框；工作台可开启右键长按 0.6 秒拖动选区，松开发送，Esc 取消。默认选择第一个显示器，可指定 `--monitor`。
@@ -15,7 +29,7 @@ Windows 截图与题目复盘工作台：题图直接交给视觉模型，电脑
 - **账号同步**：同一服务下登录同一账号，跨电脑、网页、手机同步模型选择、提示词、当前复盘与历史；不同账号的内容隔离。也可直接使用设备配对空间。
 - **本地保存**：每个空间最近 30 条复盘、题图与配置写入本机 SQLite，重启后保留。可删除记录及题图。
 
-## Windows 快速开始
+## 源码版 Windows 开始步骤
 
 1. 安装 **Python 3.12**，保留安装器中的 Python Launcher 和 Tcl/Tk 选项，下载并解压仓库。
 2. 双击 `setup-windows.bat` 安装依赖。
@@ -74,6 +88,15 @@ INTERVIEW_AI_MODEL=gpt-4.1-mini
 原图、缩略图、复盘和模型配置存放在 `.runtime/workspace.sqlite3`；其中模型密钥是服务器本地保存的值，数据库没有应用层加密，不要分享 `.runtime`。`.env`、会话、数据库与二维码均已被 Git 忽略。默认每次服务启动更新设备配对令牌，账号会话可跨重启使用；设置至少 24 字符的 `INTERVIEW_PAIR_TOKEN` 可固定设备配对。
 
 ## 开发与验证
+
+Windows 开发机可运行 `uv run --no-sync screenbridge-app` 打开桌面启动窗口。构建应用包：
+
+```bash
+uv sync --frozen --extra desktop --extra dev --extra build
+uv run --no-sync pyinstaller --noconfirm --clean ScreenBridge.spec
+```
+
+成品位于 `dist/ScreenBridge/`。Windows 打包工作流会直接执行打包后的 exe，验证自带界面资源、服务启动、原生截图客户端及截图上传流程后，才上传下载包；此检查使用演示模式，不证明真实 AI 识别效果。
 
 ```bash
 uv sync --frozen --extra dev

@@ -1,0 +1,65 @@
+name: Build Windows App
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.23'
+      - name: Install dependencies
+        run: uv sync --frozen --extra desktop --extra dev --extra build
+      - name: Check source
+        run: |
+          uv run --no-sync ruff check .
+          uv run --no-sync pytest -q
+      - name: Package executable
+        run: uv run --no-sync pyinstaller --noconfirm --clean ScreenBridge.spec
+      - name: Verify packaged application
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath 'dist/ScreenBridge/ScreenBridge.exe' -ArgumentList '--package-smoke', '--result-path', 'build/packaged-smoke.json' -PassThru
+          if (-not $process.WaitForExit(60000)) {
+            Stop-Process -Id $process.Id
+            throw 'Packaged smoke test timed out'
+          }
+          $result = Get-Content 'build/packaged-smoke.json' -Raw | ConvertFrom-Json
+          Get-Content 'build/packaged-smoke.json'
+          if ($process.ExitCode -ne 0) { throw "Packaged application failed: $($result.error)" }
+          if (-not $result.ok -or -not $result.frozen -or -not $result.native_checked) {
+            throw 'Executable, embedded UI, service and native screenshot were not all verified'
+          }
+      - name: Add user guide
+        shell: pwsh
+        run: Copy-Item 'docs/Windows应用使用说明.txt' 'dist/ScreenBridge/使用说明.txt'
+      - name: Upload Windows application
+        id: application
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScreenBridge-Windows-app
+          path: dist/ScreenBridge/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Application download link
+        shell: pwsh
+        run: |
+          "## ScreenBridge Windows application" >> $env:GITHUB_STEP_SUMMARY
+          "[Download app — no Python installation needed](${{ steps.application.outputs.artifact-url }})" >> $env:GITHUB_STEP_SUMMARY
+          "Extract all files, then double-click ScreenBridge.exe." >> $env:GITHUB_STEP_SUMMARY
+      - name: Upload smoke diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-app-diagnostics
+          path: build/packaged-smoke.json
+          if-no-files-found: ignore
