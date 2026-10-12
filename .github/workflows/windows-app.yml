@@ -63,3 +63,13 @@ jobs:
           name: windows-app-diagnostics
           path: build/packaged-smoke.json
           if-no-files-found: ignore
+      - name: Report smoke diagnostics
+        if: failure()
+        shell: pwsh
+        run: |
+          if (Test-Path 'build/packaged-smoke.json') {
+            "## Package smoke diagnostics" >> $env:GITHUB_STEP_SUMMARY
+            '```json' >> $env:GITHUB_STEP_SUMMARY
+            Get-Content 'build/packaged-smoke.json' -Raw >> $env:GITHUB_STEP_SUMMARY
+            '```' >> $env:GITHUB_STEP_SUMMARY
+          }

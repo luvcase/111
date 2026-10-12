@@ -291,6 +291,12 @@ def package_smoke(result_path, native=None):
         controller = None
     except Exception as exc:
         result["error"] = str(exc)
+        if controller:
+            log_file = controller.directory / "desktop.log"
+            if log_file.exists():
+                result["native_log"] = log_file.read_text(encoding="utf-8", errors="replace")[
+                    -5000:
+                ]
     finally:
         if controller:
             try:
