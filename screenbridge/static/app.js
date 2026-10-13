@@ -1,18 +1,20 @@
 "use strict";
 const $ = id => document.getElementById(id);
-const names = {concise:"速答",explain:"详细解析",code:"编程题",choice:"选项分析",visual:"图形推理"};
+const names = {concise:"速答",explain:"详细解析",code:"编程题",choice:"选项分析",visual:"图形推理",shenlun:"申论作答"};
 const states = {queued:"等待处理",processing:"正在分析",done:"已完成",error:"处理失败"};
 const builtinPrompts = [
   {name:"先答后析",text:"先给出直接答案，再逐条说明依据。"},
   {name:"排除法",text:"逐项检查选项，明确排除理由，不遗漏多选情况。"},
   {name:"编程复盘",text:"使用 Python 3，提供边界用例、时间和空间复杂度，解释核心实现。"},
-  {name:"图形规律",text:"分别检查数量、位置、旋转、对称与叠加规律；说明哪些规律无法验证。"}
+  {name:"图形规律",text:"分别检查数量、位置、旋转、对称与叠加规律；说明哪些规律无法验证。"},
+  {name:"申论 · 材料与格式",text:"严格依据给定材料和题目要求作答。概括题分类列要点，应用文按指定身份、对象与格式组织，文章写作紧扣中心论点。缺少材料时明确指出，不编造材料、政策、数据或引用。遵守字数限制，answer 只放作答正文。"}
 ];
 let token = sessionStorage.getItem("screenbridge-token") || localStorage.getItem("screenbridge-account-token") || "";
 let socket=null,reconnectTimer=null,generation=0,imageFile=null,imageJob=null,ignoredImage=null;
 let models=[],modelPresets=[],prefs={model_ids:["default"],mode:"concise",prompt:"",question_type:"auto",collaborate:false,right_hold:false,current_job_id:null,custom_prompts:[]};
 const effortNames={auto:"自动",low:"低",medium:"中",high:"高",xhigh:"更高"};
-const records=new Map(), tests=new Map(), ocrConsumed=new Set();
+const records=new Map(), tests=new Map(), ocrConsumed=new Set(), detailStates=new Map();
+let lastMobileView="";
 const fragment=new URLSearchParams(location.hash.slice(1)).get("token");
 if(fragment){token=fragment;history.replaceState(null,"",location.pathname);}
 function node(tag,text,cls){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e;}
@@ -63,17 +65,22 @@ function renderModels(){
   }
 }
 function richText(text){const wrap=node("div",undefined,"answer");text.split(/```/).forEach((chunk,i)=>{if(i%2)wrap.append(node("pre",chunk.replace(/^\w*\n/,"")));else wrap.append(document.createTextNode(chunk));});return wrap;}
-function renderResult(result,operation){
+function folded(title,content,key){
+  const detail=node("details",undefined,"result-details"),summary=node("summary",title);detail.append(summary,content);detail.open=detailStates.get(key)||false;detail.addEventListener("toggle",()=>detailStates.set(key,detail.open));return detail;
+}
+function renderResult(result,operation,key){
   const card=node("section",undefined,"model-result");card.append(node("h3",result.model_name||"综合建议"));
-  if(result.api_model||result.requested_model)card.append(node("p",`模型：${result.api_model||result.requested_model}${result.reasoning_effort?` · 推理 ${effortNames[result.reasoning_effort]||result.reasoning_effort}`:""}`,"hint"));
-  if(result.api_model&&result.requested_model&&result.api_model!==result.requested_model)card.append(node("p",`请求模型 ID：${result.requested_model}`,"hint"));
   if(result.status&&result.status!=="done"){card.append(node("p",result.error||states[result.status],result.status==="error"?"error":"pending"));return card;}
-  if(result.question){card.append(node("div",operation==="ocr"?"OCR 转录":"题干识别","result-label"),node("div",result.question,"question-text"));}
-  if(operation!=="ocr"){card.append(node("div","答案","result-label"),richText(result.answer||""));}
-  if(result.steps?.length){card.append(node("div","关键步骤","result-label"));const list=node("ol",undefined,"steps");result.steps.forEach(s=>list.append(node("li",s)));card.append(list);}
+  if(operation!=="ocr")card.append(node("div","答案","result-label"),richText(result.answer||""));
+  else if(result.question)card.append(node("div","OCR 转录","result-label"),node("div",result.question,"question-text"));
   if(result.cautions?.length)card.append(node("div","注意事项","result-label"),node("div",result.cautions.join("\n"),"cautions"));
-  if(result.elapsed_ms!==undefined)card.append(node("p",`${(result.elapsed_ms/1000).toFixed(1)} 秒`,"hint"));
-  const copy=node("button","复制结果","copy-button");copy.addEventListener("click",async()=>{const text=[result.question,result.answer,...(result.steps||[]),...(result.cautions||[])].filter(Boolean).join("\n\n");try{await navigator.clipboard.writeText(text);copy.textContent="已复制";}catch{copy.textContent="请长按文本选择复制";}});card.append(copy);return card;
+  const copy=node("button",operation==="ocr"?"复制文字":"复制答案","copy-button");copy.addEventListener("click",async()=>{const text=operation==="ocr"?result.question:result.answer;try{await navigator.clipboard.writeText(text||"");copy.textContent="已复制";}catch{copy.textContent="请长按文本选择复制";}});card.append(copy);
+  if(result.steps?.length){const list=node("ol",undefined,"steps");result.steps.forEach(s=>list.append(node("li",s)));card.append(folded("解析与复核",list,key+"-steps"));}
+  if(operation!=="ocr"&&result.question)card.append(folded("查看题意（默认收起）",node("div",result.question,"question-text"),key+"-question"));
+  const info=node("div");if(result.api_model||result.requested_model)info.append(node("p",`模型：${result.api_model||result.requested_model}${result.reasoning_effort?` · 推理设置 ${effortNames[result.reasoning_effort]||result.reasoning_effort}`:""}`,"hint"));
+  if(result.api_model&&result.requested_model&&result.api_model!==result.requested_model)info.append(node("p",`请求模型 ID：${result.requested_model}`,"hint"));
+  if(result.elapsed_ms!==undefined)info.append(node("p",`${(result.elapsed_ms/1000).toFixed(1)} 秒`,"hint"));
+  if(info.childNodes.length)card.append(folded("模型与耗时",info,key+"-info"));return card;
 }
 function preview(src){$("image-preview").src=src||"";$("image-preview").hidden=!src;$("preview-empty").hidden=!!src;$("crop-image").disabled=!src;$("clear-image").disabled=!src;}
 function render(){
@@ -83,13 +90,15 @@ function render(){
   $("jobs").replaceChildren();$("empty").hidden=!!active;if(!active)return;
   if(!imageFile&&ignoredImage!==active.id){imageJob=active.thumbnail?active.id:null;preview(active.thumbnail||"");}
   const card=node("article",undefined,"card job"),head=node("div",undefined,"job-header"),title=node("div",active.operation==="ocr"?"图片转文字":`${names[active.mode]} · ${active.results.length} 模型`,"job-title");title.append(node("span",new Date(active.created_at*1000).toLocaleString(),"job-time"));head.append(title,node("span",active.partial?"部分完成":states[active.status],`badge ${active.status==="error"?"error":""}`));card.append(head);
-  if(active.input_text)card.append(node("p",active.input_text,"question-text"));
-  const grid=node("div",undefined,"comparison");active.results.forEach(r=>grid.append(renderResult(r,active.operation)));card.append(grid);
-  if(active.synthesis){const section=node("div",undefined,"synthesis");section.append(node("h3","协同综合建议"),renderResult(active.synthesis,"analyze"));card.append(section);}
+  const grid=node("div",undefined,"comparison");active.results.forEach((r,i)=>grid.append(renderResult(r,active.operation,active.id+"-"+i)));card.append(grid);
+  if(active.synthesis){const section=node("div",undefined,"synthesis");section.append(node("h3","协同综合建议"),renderResult(active.synthesis,"analyze",active.id+"-synthesis"));card.append(section);}
   if(active.synthesis_error)card.append(node("p",active.synthesis_error,"error"));
+  if(active.input_text)card.append(folded("输入题目与材料",node("div",active.input_text,"question-text"),active.id+"-input"));
   if(active.operation==="ocr"&&active.status==="done"&&!ocrConsumed.has(active.id)){ocrConsumed.add(active.id);if(!$("question").value.trim())$("question").value=active.answer;}
   if(active.status==="done"||active.status==="error"){const del=node("button","删除此记录与题图","text-button");del.addEventListener("click",async()=>{if(!confirm("删除这条复盘记录和题图？"))return;try{await api(`/api/jobs/${active.id}`,{method:"DELETE"});}catch(e){$("upload-status").textContent=e.message;}});card.append(del);}
   $("jobs").append(card);
+  const mobileView=active.id+":"+active.status+":"+active.results.map(r=>r.status).join(",");
+  if(matchMedia("(max-width: 700px)").matches&&mobileView!==lastMobileView){lastMobileView=mobileView;requestAnimationFrame(()=>{if(!document.querySelector("dialog[open]"))$("jobs").scrollIntoView({block:"start",behavior:"auto"});});}
 }
 function connectSocket(){
   clearTimeout(reconnectTimer);if(!token)return;const current=generation;
@@ -109,7 +118,7 @@ async function pair(value){
     $("pairing").hidden=true;$("workspace").hidden=false;$("demo-banner").hidden=!status.demo;$("account-button").textContent=status.username;$("provider-status").textContent=`${status.username} · ${status.demo?"演示传输模式":"视觉分析工作台"}`;$("pair-error").textContent="";imageFile=null;imageJob=null;ignoredImage=null;records.clear();tests.clear();ocrConsumed.clear();await loadModels();applyPrefs(await api("/api/workspace"));connectSocket();
   }catch(e){$("pair-error").textContent=e.message;connection("未连接");}
 }
-function disconnect(){generation++;token="";sessionStorage.removeItem("screenbridge-token");localStorage.removeItem("screenbridge-account-token");clearTimeout(reconnectTimer);if(socket)socket.close();records.clear();imageFile=null;imageJob=null;preview("");render();$("workspace").hidden=true;$("pairing").hidden=false;$("token").value="";$("account-button").textContent="账号登录";connection("未连接");}
+function disconnect(){generation++;token="";lastMobileView="";detailStates.clear();sessionStorage.removeItem("screenbridge-token");localStorage.removeItem("screenbridge-account-token");clearTimeout(reconnectTimer);if(socket)socket.close();records.clear();imageFile=null;imageJob=null;preview("");render();$("workspace").hidden=true;$("pairing").hidden=false;$("token").value="";$("account-button").textContent="账号登录";connection("未连接");}
 async function imageBlob(){
   if(imageFile)return imageFile;
   if(!imageJob)return null;
@@ -128,7 +137,8 @@ $("disconnect").addEventListener("click",async()=>{try{await api("/api/auth/logo
 $("image-input").addEventListener("change",e=>{const file=e.target.files[0];if(!file)return;if(file.size>8*1024*1024){$("upload-status").textContent="图片不能超过 8 MB";return;}const reader=new FileReader();reader.onload=()=>{imageFile=file;imageJob=null;preview(reader.result);$("upload-status").textContent="题图已导入，可直接分析或 OCR。";};reader.readAsDataURL(file);e.target.value="";});
 $("clear-image").addEventListener("click",()=>{imageFile=null;imageJob=null;ignoredImage=prefs.current_job_id;preview("");});
 $("analyze").addEventListener("click",()=>submit("analyze"));$("ocr").addEventListener("click",()=>submit("ocr"));
-for(const id of ["mode","question-type","right-hold","collaborate","prompt"])$(id).addEventListener("change",savePrefs);
+for(const id of ["mode","right-hold","collaborate","prompt"])$(id).addEventListener("change",savePrefs);
+$("question-type").addEventListener("change",()=>{if($("question-type").value==="shenlun")$("mode").value="shenlun";savePrefs();});
 $("prompt-library").addEventListener("change",()=>{const p=[...builtinPrompts,...prefs.custom_prompts][Number($("prompt-library").value)];$("prompt").value=$("prompt-library").value===""?"":p.text;savePrefs();});
 $("save-prompt").addEventListener("click",()=>{if(!$("prompt").value.trim()){ $("settings-status").textContent="请先填写提示词";return;}const name=window.prompt("为提示词取一个名字");if(!name)return;prefs.custom_prompts.push({name,text:$("prompt").value});savePrefs().then(()=>renderPrompts());});
 $("new-model").addEventListener("click",()=>editModel(null));

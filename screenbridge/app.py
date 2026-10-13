@@ -26,7 +26,7 @@ from .store import Store
 MAX_UPLOAD = 8 * 1024 * 1024
 MAX_PIXELS = 24_000_000
 STATIC = Path(__file__).parent / "static"
-QUESTION_TYPES = {"auto", "choice", "visual", "code", "math"}
+QUESTION_TYPES = {"auto", "choice", "visual", "code", "math", "shenlun"}
 
 
 class ModelInput(BaseModel):

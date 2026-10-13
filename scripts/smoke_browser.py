@@ -120,6 +120,14 @@ def main():
         expect(page.locator(".synthesis")).to_be_visible()
         expect(mobile.locator(".comparison .model-result")).to_have_count(2)
         expect(mobile.locator(".job .badge")).to_have_text("已完成")
+        expect(mobile.locator(".comparison .model-result").first.locator(".answer")).to_be_visible()
+        assert (
+            mobile.locator(".comparison .model-result").first.locator(".answer").bounding_box()["y"]
+            < 300
+        )
+        expect(
+            mobile.locator(".comparison .model-result").first.locator(".question-text")
+        ).not_to_be_visible()
         expect(mobile.locator(".synthesis")).to_be_visible()
         mobile.reload()
         expect(mobile.locator("#connection")).to_have_text("● 已连接")
@@ -133,10 +141,22 @@ def main():
             "演示转录 · 未识别图片\n\n演示转录 · 未识别图片"
         )
         page.locator("#clear-image").click()
-        page.locator("#question").fill("计算 1 + 1，并说明过程。")
+        long_question = (
+            "给定材料：社区通过协商改善居民服务。" * 100 + "请概括主要做法，不超过200字。"
+        )
+        page.locator("#question-type").select_option("shenlun")
+        expect(page.locator("#mode")).to_have_value("shenlun")
+        expect(mobile.locator("#mode")).to_have_value("shenlun")
+        mobile.evaluate("window.scrollTo(0,document.body.scrollHeight)")
+        page.locator("#question").fill(long_question)
         page.locator("#analyze").click()
-        expect(mobile.locator(".job > .question-text")).to_have_text("计算 1 + 1，并说明过程。")
+        expect(mobile.locator(".job > details .question-text")).to_have_text(long_question)
+        expect(mobile.locator(".job > details .question-text")).not_to_be_visible()
         expect(mobile.locator(".job .badge")).to_have_text("已完成")
+        answer = mobile.locator(".comparison .model-result").first.locator(".answer")
+        expect(answer).to_be_visible()
+        assert 0 <= answer.bounding_box()["y"] < 300
+        mobile.screenshot(path=str(runtime / "mobile-answer-first.png"))
         page.once("dialog", lambda dialog: dialog.accept())
         page.get_by_role("button", name="删除此记录与题图", exact=True).click()
         expect(mobile.locator("#history-list button")).to_have_count(2)

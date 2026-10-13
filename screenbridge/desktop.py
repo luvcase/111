@@ -60,7 +60,7 @@ def validate_server(server):
 def run_desktop(
     server,
     token,
-    hotkey="<ctrl>+<alt>+s",
+    hotkey="<alt>+s",
     monitor=1,
     mode=None,
     region_hotkey="<ctrl>+<alt>+a",

@@ -66,7 +66,7 @@ def main():
     desktop = sub.add_parser("desktop", help="启动电脑全局快捷键截图客户端")
     desktop.add_argument("--server", default="http://127.0.0.1:8765")
     desktop.add_argument("--token-file", type=Path, default=Path.cwd() / ".runtime/pair-token.txt")
-    desktop.add_argument("--hotkey", default="<ctrl>+<alt>+s")
+    desktop.add_argument("--hotkey", default="<alt>+s")
     desktop.add_argument("--monitor", type=int, default=1)
     desktop.add_argument("--mode", choices=list(MODES), default=None)
     desktop.add_argument("--region-hotkey", default="<ctrl>+<alt>+a")
