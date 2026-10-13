@@ -39,6 +39,7 @@ class ModelInput(BaseModel):
     max_output_tokens: int = Field(default=16384, ge=1024, le=32768)
     compact_output: bool = False
     qwen_thinking: Literal["auto", "off", "on"] = "auto"
+    request_timeout_seconds: int = Field(default=0, ge=0, le=600)
 
 
 class CatalogInput(BaseModel):
@@ -122,6 +123,7 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
             "max_output_tokens": settings.max_output_tokens,
             "compact_output": settings.compact_output,
             "qwen_thinking": settings.qwen_thinking,
+            "request_timeout_seconds": settings.request_timeout_seconds,
         }
         result = {"default": default}
         result.update(
@@ -131,6 +133,7 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
                     "max_output_tokens": 16384,
                     "compact_output": False,
                     "qwen_thinking": "auto",
+                    "request_timeout_seconds": 0,
                 }
                 | item
                 for item in store.all(owner, "models")
@@ -190,15 +193,21 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
                 max_output_tokens=config["max_output_tokens"],
                 compact_output=config["compact_output"],
                 qwen_thinking=config["qwen_thinking"],
+                request_timeout_seconds=config["request_timeout_seconds"],
             )
         )
         waiting = time.monotonic()
         async with semaphore:
             queue_ms = round((time.monotonic() - waiting) * 1000)
             if hasattr(selected, "analyze"):
-                result = await selected.analyze(
-                    jpeg, text, options.mode, options.prompt, operation, options.question_type
-                )
+                try:
+                    result = await selected.analyze(
+                        jpeg, text, options.mode, options.prompt, operation, options.question_type
+                    )
+                except ProviderError as exc:
+                    if exc.diagnostics:
+                        exc.diagnostics["queue_wait_ms"] = queue_ms
+                    raise
                 return result | {"queue_wait_ms": queue_ms}
             return {
                 "question": text,
@@ -219,6 +228,9 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
                 result.update(data, status="done")
             except ProviderError as exc:
                 result.update(status="error", error=str(exc))
+                if exc.diagnostics:
+                    result["diagnostics"] = exc.diagnostics
+                    result["queue_wait_ms"] = exc.diagnostics.get("queue_wait_ms", 0)
             except Exception:
                 result.update(status="error", error="模型处理失败，请检查配置后重试。")
             result["elapsed_ms"] = round((time.monotonic() - start) * 1000)
@@ -500,6 +512,7 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
             "max_output_tokens": value.max_output_tokens,
             "compact_output": value.compact_output,
             "qwen_thinking": value.qwen_thinking,
+            "request_timeout_seconds": value.request_timeout_seconds,
         }
         store.put(owner, "models", key, model)
         event(owner, {"type": "models"})
@@ -536,6 +549,7 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
                 max_output_tokens=config["max_output_tokens"],
                 compact_output=config["compact_output"],
                 qwen_thinking=config["qwen_thinking"],
+                request_timeout_seconds=config["request_timeout_seconds"],
             )
         )
         try:

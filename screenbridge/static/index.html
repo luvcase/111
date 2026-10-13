@@ -45,6 +45,7 @@
 <div class="two-fields"><div><label for="reasoning-effort">OpenAI 推理强度</label><select id="reasoning-effort"><option value="auto">自动（模型默认）</option><option value="low">低</option><option value="medium">中</option><option value="high">高 · 严谨分析</option><option value="xhigh">更高（需模型支持）</option></select></div><div><label for="output-budget">输出预算（token）</label><input id="output-budget" type="number" min="1024" max="32768" step="1" required value="16384"></div></div>
 <label for="qwen-thinking">百炼千问思考开关（需型号支持）</label><select id="qwen-thinking"><option value="auto">自动：遵循模型默认，不发送开关</option><option value="off">关闭思考：发送 enable_thinking=false</option><option value="on">开启思考：发送 enable_thinking=true</option></select>
 <label class="check"><input id="compact-output" type="checkbox">简短输出：答案直接呈现，减少解析和重复说明</label>
+<label for="request-timeout">回复等待上限（秒，0 为自动）</label><input id="request-timeout" type="number" min="0" max="600" step="1" required value="0"><p class="hint">自动：百炼千问 180 秒、OpenAI 推理模型 240 秒、其他接口 90 秒。连接另限 15 秒，上传另限 30 秒。提高上限只延长等待，不会让回答更快；超时不会自动重发，避免重复调用。</p>
 <button id="speed-preset" type="button" class="secondary">使用快速输出设置</button>
 <p class="hint">快速设置将预算设为 2048 并开启简短输出，不改变模型或思考开关。复杂图形题减少思考可能降低正确率；不支持千问开关时选“自动”。输出预算对兼容服务也生效，OpenAI 推理模型的预算包含推理 token。</p>
 <label class="check"><input id="use-saved-model" type="checkbox" checked>保存后使用此模型（切换为单模型）</label>

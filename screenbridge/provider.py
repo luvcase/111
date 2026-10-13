@@ -67,6 +67,7 @@ class Settings:
     max_output_tokens: int = 16384
     compact_output: bool = False
     qwen_thinking: str = "auto"
+    request_timeout_seconds: int = 0
 
     def __post_init__(self):
         parsed = urlsplit(self.base_url)
@@ -94,7 +95,9 @@ class Settings:
 
 
 class ProviderError(Exception):
-    pass
+    def __init__(self, message, diagnostics=None):
+        super().__init__(message)
+        self.diagnostics = diagnostics or {}
 
 
 def rate_error_kind(response):
@@ -294,11 +297,28 @@ class AIProvider:
                 # The modern limit includes reasoning tokens, not just the visible answer.
                 budget = 1024 if connection_check else self.settings.max_output_tokens
             payload["max_completion_tokens"] = budget
+        timeout = self.settings.request_timeout_seconds or (
+            240 if official and reasoning else 180 if qwen else 90
+        )
+        request_started = time.monotonic()
+        self.diagnostics = {
+            "endpoint_host": host,
+            "model_confirmed": False,
+            "api_ms": 0,
+            "retry_wait_ms": 0,
+            "attempts": 0,
+            "output_budget": payload.get("max_completion_tokens", payload.get("max_tokens")),
+            "qwen_thinking": self.settings.qwen_thinking if qwen else "not_applicable",
+            "compact_output": self.settings.compact_output,
+            "read_timeout_seconds": timeout,
+        }
         try:
-            timeout = 240 if official and reasoning else 90
             api_seconds = wait_seconds = 0
-            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=15)) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(timeout, connect=15, write=30, pool=15)
+            ) as client:
                 for attempt in range(3):
+                    self.diagnostics["attempts"] = attempt + 1
                     started = time.monotonic()
                     response = await client.post(
                         self.settings.base_url + "/chat/completions",
@@ -333,21 +353,23 @@ class AIProvider:
                 )
                 usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
                 details = usage.get("completion_tokens_details", {})
-                self.diagnostics = {
-                    "endpoint_host": host,
-                    "model_confirmed": bool(self.response_model),
-                    "api_ms": round(api_seconds * 1000),
-                    "retry_wait_ms": round(wait_seconds * 1000),
-                    "attempts": attempt + 1,
-                    "request_id": safe_identifier(
-                        response.headers.get("x-request-id") or data.get("id")
-                    ),
-                    "output_budget": payload.get(
-                        "max_completion_tokens", payload.get("max_tokens")
-                    ),
-                    "qwen_thinking": self.settings.qwen_thinking if qwen else "not_applicable",
-                    "compact_output": self.settings.compact_output,
-                }
+                self.diagnostics.update(
+                    {
+                        "endpoint_host": host,
+                        "model_confirmed": bool(self.response_model),
+                        "api_ms": round(api_seconds * 1000),
+                        "retry_wait_ms": round(wait_seconds * 1000),
+                        "attempts": attempt + 1,
+                        "request_id": safe_identifier(
+                            response.headers.get("x-request-id") or data.get("id")
+                        ),
+                        "output_budget": payload.get(
+                            "max_completion_tokens", payload.get("max_tokens")
+                        ),
+                        "qwen_thinking": self.settings.qwen_thinking if qwen else "not_applicable",
+                        "compact_output": self.settings.compact_output,
+                    }
+                )
                 for name, value in {
                     "input_tokens": usage.get("prompt_tokens"),
                     "output_tokens": usage.get("completion_tokens"),
@@ -359,7 +381,32 @@ class AIProvider:
                         self.diagnostics[name] = value
                 return content.strip()
         except httpx.TimeoutException as exc:
-            raise ProviderError("AI 请求超时，请检查网络或稍后重试。") from exc
+            self.diagnostics.update(
+                api_ms=round((time.monotonic() - request_started - wait_seconds) * 1000),
+                retry_wait_ms=round(wait_seconds * 1000),
+            )
+            if isinstance(exc, httpx.ReadTimeout):
+                phase = "等待接口回复"
+                hint = (
+                    "可能是服务仍在排队或生成，也可能是网络中断；不能据此断定网络故障。"
+                    "可在模型配置中调整等待上限，但延长等待不会让模型更快。"
+                )
+            elif isinstance(exc, httpx.ConnectTimeout):
+                phase = "建立连接"
+                hint = "请检查 API 地址、地域和网络连接。"
+            elif isinstance(exc, httpx.WriteTimeout):
+                phase = "上传请求"
+                hint = "请检查网络上传，并尝试缩小截图范围。"
+            else:
+                phase = "等待本机连接资源"
+                hint = "请减少同时提交的任务后重试。"
+            self.diagnostics["timeout_phase"] = phase
+            elapsed = time.monotonic() - request_started
+            raise ProviderError(
+                f"AI 请求超时：{phase}，实际等待约 {elapsed:.1f} 秒，回复等待上限 {timeout} 秒。"
+                f"{hint}本次超时未自动重试，服务端是否完成或计量需在服务商处核对。",
+                self.diagnostics.copy(),
+            ) from exc
         except httpx.HTTPStatusError as exc:
             code = exc.response.status_code
             if code == 403:

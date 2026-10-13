@@ -45,7 +45,7 @@ async function loadModels(){const data=await api("/api/models");models=data.mode
 function editModel(model){
   $("model-id").value=model?.id||"";$("model-name").value=model?.name||"";$("model-url").value=model?.base_url||"https://api.openai.com/v1";$("model-name-api").value=model?.model||"gpt-4.1-mini";$("model-key").value="";$("model-error").textContent="";
   $("reasoning-effort").value=model?.reasoning_effort||"auto";$("output-budget").value=model?.max_output_tokens||16384;$("use-saved-model").checked=true;
-  $("compact-output").checked=!!model?.compact_output;$("qwen-thinking").value=model?.qwen_thinking||"auto";
+  $("compact-output").checked=!!model?.compact_output;$("qwen-thinking").value=model?.qwen_thinking||"auto";$("request-timeout").value=model?.request_timeout_seconds||0;
   $("model-preset").replaceChildren(node("option","手动填写 / 其他模型"));$("model-preset").firstChild.value="";
   modelPresets.forEach(p=>{const option=node("option",`${p.label} · ${p.model}`);option.value=p.model;$("model-preset").append(option);});
   $("model-preset").value=modelPresets.some(p=>p.model===$("model-name-api").value)?$("model-name-api").value:"";
@@ -72,24 +72,28 @@ function folded(title,content,key){
 }
 function renderResult(result,operation,key){
   const card=node("section",undefined,"model-result");card.append(node("h3",result.model_name||"综合建议"));
-  if(result.status&&result.status!=="done"){card.append(node("p",result.error||states[result.status],result.status==="error"?"error":"pending"));return card;}
+  if(result.status&&result.status!=="done"){card.append(node("p",result.error||states[result.status],result.status==="error"?"error":"pending"));if(result.status==="error")card.append(renderInfo(result,key));return card;}
   if(operation!=="ocr")card.append(node("div","答案","result-label"),richText(result.answer||""));
   else if(result.question)card.append(node("div","OCR 转录","result-label"),node("div",result.question,"question-text"));
   if(result.cautions?.length)card.append(node("div","注意事项","result-label"),node("div",result.cautions.join("\n"),"cautions"));
   const copy=node("button",operation==="ocr"?"复制文字":"复制答案","copy-button");copy.addEventListener("click",async()=>{const text=operation==="ocr"?result.question:result.answer;try{await navigator.clipboard.writeText(text||"");copy.textContent="已复制";}catch{copy.textContent="请长按文本选择复制";}});card.append(copy);
   if(result.steps?.length){const list=node("ol",undefined,"steps");result.steps.forEach(s=>list.append(node("li",s)));card.append(folded("解析与复核",list,key+"-steps"));}
   if(operation!=="ocr"&&result.question)card.append(folded("查看题意（默认收起）",node("div",result.question,"question-text"),key+"-question"));
+  card.append(renderInfo(result,key));return card;
+}
+function renderInfo(result,key){
   const info=node("div");if(result.api_model||result.requested_model)info.append(node("p",`模型：${result.api_model||result.requested_model}${result.reasoning_effort?` · 推理设置 ${effortNames[result.reasoning_effort]||result.reasoning_effort}`:""}`,"hint"));
   if(result.api_model&&result.requested_model&&result.api_model!==result.requested_model)info.append(node("p",`请求模型 ID：${result.requested_model}`,"hint"));
   if(result.elapsed_ms!==undefined)info.append(node("p",`${(result.elapsed_ms/1000).toFixed(1)} 秒`,"hint"));
   const d=result.diagnostics;
   if(d){info.append(node("p",`接口耗时 ${(d.api_ms/1000).toFixed(1)} 秒 · 排队 ${((result.queue_wait_ms||0)/1000).toFixed(1)} 秒 · 重试等待 ${(d.retry_wait_ms/1000).toFixed(1)} 秒 · 请求 ${d.attempts} 次`,"hint"));
     info.append(node("p",`实际发送预算 ${d.output_budget} · ${d.compact_output?"简短输出":"完整输出"} · 千问思考 ${d.qwen_thinking}`,"hint"));
+    if(d.read_timeout_seconds!==undefined)info.append(node("p",`回复等待上限 ${d.read_timeout_seconds} 秒${d.timeout_phase?" · 超时阶段："+d.timeout_phase:""}`,"hint"));
     const counts=[["输入",d.input_tokens],["输出",d.output_tokens],["推理",d.reasoning_tokens]].filter(([,v])=>v!==undefined).map(([name,v])=>`${name} ${v}`).join(" · ");if(counts)info.append(node("p",counts+" token","hint"));
     info.append(node("p",d.model_confirmed?"模型 ID 来自接口响应":"接口未返回模型 ID，上方展示的是请求配置","hint"));
     if(d.request_id)info.append(node("p","请求 ID："+d.request_id,"hint"));if(d.endpoint_host)info.append(node("p","接口域名："+d.endpoint_host,"hint"));
   }
-  if(info.childNodes.length)card.append(folded("模型与耗时",info,key+"-info"));return card;
+  const detail=folded("模型与耗时",info,key+"-info");if(result.status==="error"&&!detailStates.has(key+"-info"))detail.open=true;return detail;
 }
 function preview(src){$("image-preview").src=src||"";$("image-preview").hidden=!src;$("preview-empty").hidden=!!src;$("crop-image").disabled=!src;$("view-original").disabled=!src;$("clear-image").disabled=!src;}
 function render(){
@@ -159,7 +163,7 @@ for(const id of ["model-url","model-key"])$(id).addEventListener("input",resetCa
 $("load-catalog").addEventListener("click",async()=>{const button=$("load-catalog");button.disabled=true;$("catalog-status").textContent="正在读取…";try{const data=await api("/api/model-catalog",{method:"POST",body:JSON.stringify({id:$("model-id").value||null,base_url:$("model-url").value,api_key:$("model-key").value})});const select=$("available-model"),first=node("option","选择账号返回的模型 ID");first.value="";select.replaceChildren(first);data.models.forEach(id=>{const option=node("option",id);option.value=id;select.append(option);});select.disabled=!data.models.length;$("catalog-status").textContent=`已读取 ${data.models.length} 个模型。${data.message} ${data.models.includes($("model-name-api").value)?"当前模型已列出。":"当前填写的模型未列出，请核对账号权限。"}`;}catch(e){resetCatalog();$("catalog-status").textContent=e.message;}finally{button.disabled=false;}});
 $("available-model").addEventListener("change",()=>{const id=$("available-model").value;if(!id)return;$("model-name-api").value=id;$("model-preset").value=modelPresets.some(p=>p.model===id)?id:"";if($("model-preset").value)$("model-preset").dispatchEvent(new Event("change"));else if(!$("model-name").value)$("model-name").value=id;});
 $("speed-preset").addEventListener("click",()=>{$("output-budget").value=2048;$("compact-output").checked=true;});
-$("model-form").addEventListener("submit",async e=>{e.preventDefault();try{const saved=await api("/api/models",{method:"POST",body:JSON.stringify({id:$("model-id").value||null,name:$("model-name").value,base_url:$("model-url").value,model:$("model-name-api").value,api_key:$("model-key").value,reasoning_effort:$("reasoning-effort").value,max_output_tokens:Number($("output-budget").value),compact_output:$("compact-output").checked,qwen_thinking:$("qwen-thinking").value})});const apply=$("use-saved-model").checked;$("model-key").value="";$("model-dialog").close();if(apply)prefs.model_ids=[saved.id];await loadModels();if(apply)await savePrefs();}catch(err){$("model-error").textContent=err.message;}});
+$("model-form").addEventListener("submit",async e=>{e.preventDefault();try{const saved=await api("/api/models",{method:"POST",body:JSON.stringify({id:$("model-id").value||null,name:$("model-name").value,base_url:$("model-url").value,model:$("model-name-api").value,api_key:$("model-key").value,reasoning_effort:$("reasoning-effort").value,max_output_tokens:Number($("output-budget").value),compact_output:$("compact-output").checked,qwen_thinking:$("qwen-thinking").value,request_timeout_seconds:Number($("request-timeout").value)})});const apply=$("use-saved-model").checked;$("model-key").value="";$("model-dialog").close();if(apply)prefs.model_ids=[saved.id];await loadModels();if(apply)await savePrefs();}catch(err){$("model-error").textContent=err.message;}});
 $("view-original").addEventListener("click",async()=>{try{const blob=await imageBlob();if(!blob)return;if(originalUrl)URL.revokeObjectURL(originalUrl);originalUrl=URL.createObjectURL(blob);const image=$("original-image");image.src=originalUrl;await image.decode();$("original-info").textContent=`${image.naturalWidth} × ${image.naturalHeight} · ${(blob.size/1024).toFixed(1)} KB。按原始像素显示，可在框内滚动；放大不能恢复原图已缺失的细节。`;$("original-dialog").showModal();}catch(e){$("upload-status").textContent=e.message;}});
 $("original-dialog").addEventListener("close",()=>{if(originalUrl)URL.revokeObjectURL(originalUrl);originalUrl=null;$("original-image").removeAttribute("src");});
 for(const id of ["account-button","login-from-pair"])$(id).addEventListener("click",()=>{$("account-error").textContent="";$("account-dialog").showModal();});

@@ -91,6 +91,7 @@ def main():
         expect(page.locator("#output-budget")).to_have_value("2048")
         expect(page.locator("#compact-output")).to_be_checked()
         page.locator("#qwen-thinking").select_option("off")
+        page.locator("#request-timeout").fill("270")
         page.locator("#model-form").get_by_role("button", name="保存并应用").click()
         expect(page.locator(".model-row")).to_have_count(2)
         expect(mobile.locator(".model-row")).to_have_count(2)
@@ -98,6 +99,7 @@ def main():
         expect(page.locator("#output-budget")).to_have_value("2048")
         expect(page.locator("#compact-output")).to_be_checked()
         expect(page.locator("#qwen-thinking")).to_have_value("off")
+        expect(page.locator("#request-timeout")).to_have_value("270")
         page.locator("#model-dialog .close-dialog").click()
         page.locator(".model-row").last.get_by_role("button", name="测试连接").click()
         expect(page.locator(".model-row").last.locator(".model-test-result")).to_contain_text(
@@ -173,6 +175,23 @@ def main():
         page.once("dialog", lambda dialog: dialog.accept())
         page.get_by_role("button", name="删除此记录与题图", exact=True).click()
         expect(mobile.locator("#history-list button")).to_have_count(2)
+        # Exercise failed-result diagnostics with a simulated timeout, without a real API call.
+        mobile.evaluate("""() => {
+          const job={id:'timeout-ui-fixture',created_at:Date.now()/1000,
+            status:'error',mode:'visual',operation:'analyze',results:[{
+              model_name:'千问',requested_model:'qwen3.8-omni-flash',status:'error',
+              error:'AI 请求超时：等待接口回复',elapsed_ms:180000,diagnostics:{
+                endpoint_host:'ws-fixture.cn-beijing.maas.aliyuncs.com',
+                api_ms:180000,retry_wait_ms:0,attempts:1,output_budget:2048,
+                qwen_thinking:'auto',compact_output:true,read_timeout_seconds:180,
+                timeout_phase:'等待接口回复',model_confirmed:false
+              }}]};
+          records.set(job.id,job);prefs.current_job_id=job.id;render();
+        }""")
+        expect(mobile.locator(".job .badge")).to_have_text("处理失败")
+        expect(mobile.locator(".model-result")).to_contain_text("回复等待上限 180 秒")
+        expect(mobile.locator(".model-result details")).to_have_attribute("open", "")
+        mobile.screenshot(path=str(runtime / "mobile-timeout-diagnostics.png"))
         mobile.locator("#disconnect").click()
         expect(mobile.locator("#pairing")).to_be_visible()
         assert not errors, errors
