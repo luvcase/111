@@ -10,7 +10,8 @@ const builtinPrompts = [
 ];
 let token = sessionStorage.getItem("screenbridge-token") || localStorage.getItem("screenbridge-account-token") || "";
 let socket=null,reconnectTimer=null,generation=0,imageFile=null,imageJob=null,ignoredImage=null;
-let models=[],prefs={model_ids:["default"],mode:"concise",prompt:"",question_type:"auto",collaborate:false,right_hold:false,current_job_id:null,custom_prompts:[]};
+let models=[],modelPresets=[],prefs={model_ids:["default"],mode:"concise",prompt:"",question_type:"auto",collaborate:false,right_hold:false,current_job_id:null,custom_prompts:[]};
+const effortNames={auto:"自动",low:"低",medium:"中",high:"高",xhigh:"更高"};
 const records=new Map(), tests=new Map(), ocrConsumed=new Set();
 const fragment=new URLSearchParams(location.hash.slice(1)).get("token");
 if(fragment){token=fragment;history.replaceState(null,"",location.pathname);}
@@ -37,16 +38,23 @@ function renderPrompts(){
   const select=$("prompt-library"),old=select.value;select.replaceChildren(node("option","自定义 / 无附加提示词"));select.firstChild.value="";
   [...builtinPrompts,...prefs.custom_prompts].forEach((p,i)=>{const option=node("option",p.name);option.value=String(i);select.append(option);});select.value=old;
 }
-async function loadModels(){models=(await api("/api/models")).models;renderModels();}
+async function loadModels(){const data=await api("/api/models");models=data.models;modelPresets=data.presets||[];renderModels();}
 function editModel(model){
-  $("model-id").value=model?.id||"";$("model-name").value=model?.name||"";$("model-url").value=model?.base_url||"https://api.openai.com/v1";$("model-name-api").value=model?.model||"gpt-4.1-mini";$("model-key").value="";$("model-error").textContent="";$("model-dialog").showModal();
+  $("model-id").value=model?.id||"";$("model-name").value=model?.name||"";$("model-url").value=model?.base_url||"https://api.openai.com/v1";$("model-name-api").value=model?.model||"gpt-4.1-mini";$("model-key").value="";$("model-error").textContent="";
+  $("reasoning-effort").value=model?.reasoning_effort||"auto";$("output-budget").value=model?.max_output_tokens||16384;$("use-saved-model").checked=true;
+  $("model-preset").replaceChildren(node("option","手动填写 / 其他模型"));$("model-preset").firstChild.value="";
+  modelPresets.forEach(p=>{const option=node("option",`${p.label} · ${p.model}`);option.value=p.model;$("model-preset").append(option);});
+  $("model-preset").value=modelPresets.some(p=>p.model===$("model-name-api").value)?$("model-name-api").value:"";
+  resetCatalog();$("model-dialog").showModal();
 }
+function resetCatalog(){const option=node("option","先读取账号可用模型");option.value="";$("available-model").replaceChildren(option);$("available-model").disabled=true;$("catalog-status").textContent="";}
 function renderModels(){
+  $("active-model").textContent="当前使用："+models.filter(m=>prefs.model_ids.includes(m.id)).map(m=>`${m.model}（推理 ${effortNames[m.reasoning_effort||"auto"]}）`).join("、");
   $("model-list").replaceChildren();
   for(const model of models){
     const row=node("div",undefined,"model-row"),label=node("label",undefined,"model-choice"),input=node("input");input.type="checkbox";input.dataset.model=model.id;input.checked=prefs.model_ids.includes(model.id);
     input.addEventListener("change",()=>{const ids=optionsFromUI().model_ids;if(ids.length<1||ids.length>3){input.checked=!input.checked;$("settings-status").textContent="请选择 1–3 套模型配置";return;}savePrefs();});
-    const title=node("span",model.name);title.append(node("span",`${model.model} · ${model.configured?"Key 已配置":"Key 未配置"}`,"model-meta"));label.append(input,title);row.append(label);
+    const title=node("span",model.name);title.append(node("span",`${model.model} · 推理 ${effortNames[model.reasoning_effort||"auto"]} · ${model.configured?"Key 已配置":"Key 未配置"}`,"model-meta"));label.append(input,title);row.append(label);
     const actions=node("div",undefined,"model-actions");
     const test=node("button","测试连接","text-button");test.addEventListener("click",async()=>{test.disabled=true;tests.set(model.id,"正在连接…");renderModels();try{const result=await api(`/api/models/${model.id}/test`,{method:"POST"});tests.set(model.id,result.message);}catch(e){tests.set(model.id,e.message);}renderModels();});
     const edit=node("button","编辑","text-button");edit.addEventListener("click",()=>editModel(model));actions.append(test,edit);
@@ -57,6 +65,8 @@ function renderModels(){
 function richText(text){const wrap=node("div",undefined,"answer");text.split(/```/).forEach((chunk,i)=>{if(i%2)wrap.append(node("pre",chunk.replace(/^\w*\n/,"")));else wrap.append(document.createTextNode(chunk));});return wrap;}
 function renderResult(result,operation){
   const card=node("section",undefined,"model-result");card.append(node("h3",result.model_name||"综合建议"));
+  if(result.api_model||result.requested_model)card.append(node("p",`模型：${result.api_model||result.requested_model}${result.reasoning_effort?` · 推理 ${effortNames[result.reasoning_effort]||result.reasoning_effort}`:""}`,"hint"));
+  if(result.api_model&&result.requested_model&&result.api_model!==result.requested_model)card.append(node("p",`请求模型 ID：${result.requested_model}`,"hint"));
   if(result.status&&result.status!=="done"){card.append(node("p",result.error||states[result.status],result.status==="error"?"error":"pending"));return card;}
   if(result.question){card.append(node("div",operation==="ocr"?"OCR 转录":"题干识别","result-label"),node("div",result.question,"question-text"));}
   if(operation!=="ocr"){card.append(node("div","答案","result-label"),richText(result.answer||""));}
@@ -122,7 +132,13 @@ for(const id of ["mode","question-type","right-hold","collaborate","prompt"])$(i
 $("prompt-library").addEventListener("change",()=>{const p=[...builtinPrompts,...prefs.custom_prompts][Number($("prompt-library").value)];$("prompt").value=$("prompt-library").value===""?"":p.text;savePrefs();});
 $("save-prompt").addEventListener("click",()=>{if(!$("prompt").value.trim()){ $("settings-status").textContent="请先填写提示词";return;}const name=window.prompt("为提示词取一个名字");if(!name)return;prefs.custom_prompts.push({name,text:$("prompt").value});savePrefs().then(()=>renderPrompts());});
 $("new-model").addEventListener("click",()=>editModel(null));
-$("model-form").addEventListener("submit",async e=>{e.preventDefault();try{await api("/api/models",{method:"POST",body:JSON.stringify({id:$("model-id").value||null,name:$("model-name").value,base_url:$("model-url").value,model:$("model-name-api").value,api_key:$("model-key").value})});$("model-key").value="";$("model-dialog").close();await loadModels();}catch(err){$("model-error").textContent=err.message;}});
+$("change-model").addEventListener("click",()=>editModel(models.find(m=>prefs.model_ids.includes(m.id))||models[0]));
+$("model-preset").addEventListener("change",()=>{const preset=modelPresets.find(p=>p.model===$("model-preset").value);if(!preset)return;$("model-name-api").value=preset.model;$("model-name").value=preset.label;$("reasoning-effort").value=preset.model.startsWith("gpt-6")?"high":"auto";$("output-budget").value=16384;});
+$("model-name-api").addEventListener("input",()=>{$("model-preset").value=modelPresets.some(p=>p.model===$("model-name-api").value)?$("model-name-api").value:"";});
+for(const id of ["model-url","model-key"])$(id).addEventListener("input",resetCatalog);
+$("load-catalog").addEventListener("click",async()=>{const button=$("load-catalog");button.disabled=true;$("catalog-status").textContent="正在读取…";try{const data=await api("/api/model-catalog",{method:"POST",body:JSON.stringify({id:$("model-id").value||null,base_url:$("model-url").value,api_key:$("model-key").value})});const select=$("available-model"),first=node("option","选择账号返回的模型 ID");first.value="";select.replaceChildren(first);data.models.forEach(id=>{const option=node("option",id);option.value=id;select.append(option);});select.disabled=!data.models.length;$("catalog-status").textContent=`已读取 ${data.models.length} 个模型。${data.message} ${data.models.includes($("model-name-api").value)?"当前模型已列出。":"当前填写的模型未列出，请核对账号权限。"}`;}catch(e){resetCatalog();$("catalog-status").textContent=e.message;}finally{button.disabled=false;}});
+$("available-model").addEventListener("change",()=>{const id=$("available-model").value;if(!id)return;$("model-name-api").value=id;$("model-preset").value=modelPresets.some(p=>p.model===id)?id:"";if($("model-preset").value)$("model-preset").dispatchEvent(new Event("change"));else if(!$("model-name").value)$("model-name").value=id;});
+$("model-form").addEventListener("submit",async e=>{e.preventDefault();try{const saved=await api("/api/models",{method:"POST",body:JSON.stringify({id:$("model-id").value||null,name:$("model-name").value,base_url:$("model-url").value,model:$("model-name-api").value,api_key:$("model-key").value,reasoning_effort:$("reasoning-effort").value,max_output_tokens:Number($("output-budget").value)})});const apply=$("use-saved-model").checked;$("model-key").value="";$("model-dialog").close();if(apply)prefs.model_ids=[saved.id];await loadModels();if(apply)await savePrefs();}catch(err){$("model-error").textContent=err.message;}});
 for(const id of ["account-button","login-from-pair"])$(id).addEventListener("click",()=>{$("account-error").textContent="";$("account-dialog").showModal();});
 $("account-form").addEventListener("submit",async e=>{e.preventDefault();const action=e.submitter?.value||"login";try{const data=await api(`/api/auth/${action}`,{method:"POST",body:JSON.stringify({username:$("username").value,password:$("password").value})});$("password").value="";$("account-dialog").close();await pair(data.token);}catch(err){$("account-error").textContent=err.message;}});
 $("link-desktop").addEventListener("click",async()=>{try{await api("/api/desktop/link",{method:"POST"});$("upload-status").textContent="正在绑定本机截图客户端，稍后可使用快捷键。";}catch(e){$("upload-status").textContent=e.message;}});

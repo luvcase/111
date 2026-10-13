@@ -1,4 +1,3 @@
-import io
 import queue
 import signal
 import threading
@@ -6,6 +5,8 @@ from urllib.parse import urlsplit
 
 import httpx
 from PIL import Image
+
+from .images import encode_question_image
 
 
 def enable_dpi_awareness():
@@ -32,11 +33,7 @@ def capture_image(monitor=1):
 
 
 def encode_image(image):
-    image = image.copy()
-    image.thumbnail((1920, 1920))
-    output = io.BytesIO()
-    image.save(output, format="JPEG", quality=85)
-    return output.getvalue()
+    return encode_question_image(image)
 
 
 def capture(monitor=1):

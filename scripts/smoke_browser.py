@@ -2,6 +2,7 @@
 
 import argparse
 import io
+import json
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -15,11 +16,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--server", default="http://127.0.0.1:8765")
     parser.add_argument("--chromium", default="/usr/bin/chromium")
+    parser.add_argument("--runtime-dir", type=Path, default=Path(".runtime"))
     args = parser.parse_args()
     with httpx.Client(timeout=5, trust_env=False) as client:
         if not client.get(args.server + "/healthz").json()["demo"]:
             parser.error("Browser smoke requires serve --demo; it does not test real AI.")
-    runtime = Path(".runtime")
+    runtime = args.runtime_dir
     token = (runtime / "pair-token.txt").read_text().strip()
     picture = io.BytesIO()
     Image.new("RGB", (500, 200), "white").save(picture, format="PNG")
@@ -55,17 +57,45 @@ def main():
         mobile.get_by_role("button", name="登录", exact=True).click()
         expect(mobile.locator("#account-button")).to_have_text(username)
         expect(mobile.locator("#connection")).to_have_text("● 已连接")
+        # Verify the visible picker, credential-list UI and applied model across devices.
+        # The provider listing is mocked here; server-side credential handling has API tests.
+        page.route(
+            "**/api/model-catalog",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {"models": ["gpt-6-astra", "gpt-6.1-sol"], "message": "模拟账号列表"}
+                ),
+            ),
+        )
+        page.locator("#change-model").click()
+        page.locator("#model-preset").select_option("gpt-6-astra")
+        expect(page.locator("#model-name-api")).to_have_value("gpt-6-astra")
+        expect(page.locator("#reasoning-effort")).to_have_value("high")
+        page.locator("#load-catalog").click()
+        expect(page.locator("#available-model")).to_be_enabled()
+        page.locator("#available-model").select_option("gpt-6.1-sol")
+        page.locator("#model-form").get_by_role("button", name="保存并应用").click()
+        expect(page.locator("#active-model")).to_contain_text("gpt-6.1-sol")
+        expect(mobile.locator("#active-model")).to_contain_text("gpt-6.1-sol")
+        mobile.locator("#change-model").click()
+        expect(mobile.locator("#model-preset")).to_have_value("gpt-6.1-sol")
+        assert mobile.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+        page.screenshot(path=str(runtime / "model-picker-demo.png"), full_page=True)
+        mobile.locator("#model-dialog .close-dialog").click()
         page.locator("#new-model").click()
         page.locator("#model-name").fill("对照模型")
         page.locator("#model-name-api").fill("demo-model-b")
-        page.locator("#model-form").get_by_role("button", name="保存配置").click()
+        page.locator("#model-form").get_by_role("button", name="保存并应用").click()
         expect(page.locator(".model-row")).to_have_count(2)
         expect(mobile.locator(".model-row")).to_have_count(2)
         page.locator(".model-row").last.get_by_role("button", name="测试连接").click()
         expect(page.locator(".model-row").last.locator(".model-test-result")).to_contain_text(
             "未验证真实"
         )
-        page.locator(".model-row").last.locator("input[type=checkbox]").check()
+        page.locator(".model-row").first.locator("input[type=checkbox]").check()
+        expect(mobile.locator(".model-row").first.locator("input[type=checkbox]")).to_be_checked()
         expect(mobile.locator(".model-row").last.locator("input[type=checkbox]")).to_be_checked()
         page.locator("#collaborate").check()
         page.locator("#mode").select_option("code")
@@ -86,6 +116,7 @@ def main():
         page.locator("#analyze").click()
         expect(page.locator(".job .badge")).to_have_text("已完成", timeout=10000)
         expect(page.locator(".comparison .model-result")).to_have_count(2)
+        expect(page.locator(".comparison .model-result").first).to_contain_text("gpt-6.1-sol")
         expect(page.locator(".synthesis")).to_be_visible()
         expect(mobile.locator(".comparison .model-result")).to_have_count(2)
         expect(mobile.locator(".job .badge")).to_have_text("已完成")

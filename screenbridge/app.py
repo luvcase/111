@@ -10,6 +10,7 @@ import time
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile, WebSocket
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -18,7 +19,8 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field
 from starlette.websockets import WebSocketDisconnect
 
-from .provider import MODES, AIProvider, ProviderError, Settings
+from .images import encode_question_image
+from .provider import MODEL_PRESETS, MODES, AIProvider, ProviderError, Settings
 from .store import Store
 
 MAX_UPLOAD = 8 * 1024 * 1024
@@ -32,6 +34,14 @@ class ModelInput(BaseModel):
     name: str = Field(min_length=1, max_length=60)
     base_url: str = Field(default="https://api.openai.com/v1", max_length=500)
     model: str = Field(min_length=1, max_length=100)
+    api_key: str = Field(default="", max_length=1000)
+    reasoning_effort: Literal["auto", "low", "medium", "high", "xhigh"] = "auto"
+    max_output_tokens: int = Field(default=16384, ge=1024, le=32768)
+
+
+class CatalogInput(BaseModel):
+    id: str | None = None
+    base_url: str = Field(default="https://api.openai.com/v1", max_length=500)
     api_key: str = Field(default="", max_length=1000)
 
 
@@ -67,10 +77,7 @@ def normalize_image(raw: bytes) -> bytes:
                 raise ValueError("图片像素过多，请缩小截图范围")
             source.load()
             image = ImageOps.exif_transpose(source).convert("RGB")
-            image.thumbnail((1920, 1920))
-            output = io.BytesIO()
-            image.save(output, format="JPEG", quality=85)
-            return output.getvalue()
+            return encode_question_image(image)
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
         raise ValueError("图片无效或损坏") from exc
 
@@ -100,7 +107,7 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
         return histories[owner]
 
     def workspace_for(owner):
-        return store.get(owner, "workspace", "current", Workspace().model_dump())
+        return Workspace().model_dump() | store.get(owner, "workspace", "current", {})
 
     def models_for(owner):
         default = {
@@ -109,9 +116,16 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
             "base_url": settings.base_url,
             "model": settings.model,
             "api_key": settings.api_key,
+            "reasoning_effort": settings.reasoning_effort,
+            "max_output_tokens": settings.max_output_tokens,
         }
         result = {"default": default}
-        result.update({item["id"]: item for item in store.all(owner, "models")})
+        result.update(
+            {
+                item["id"]: {"reasoning_effort": "auto", "max_output_tokens": 16384} | item
+                for item in store.all(owner, "models")
+            }
+        )
         return result
 
     def safe_model(model):
@@ -162,6 +176,8 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
                 base_url=config["base_url"],
                 model=config["model"],
                 demo=settings.demo,
+                reasoning_effort=config["reasoning_effort"],
+                max_output_tokens=config["max_output_tokens"],
             )
         )
         async with semaphore:
@@ -266,6 +282,8 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
                 {
                     "model_id": config["id"],
                     "model_name": config["name"],
+                    "requested_model": config["model"],
+                    "reasoning_effort": config["reasoning_effort"],
                     "status": "queued",
                     "answer": "",
                     "question": "",
@@ -402,7 +420,28 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
     @app.get("/api/models")
     async def get_models(authorization: str | None = Header(default=None)):
         return {
-            "models": [safe_model(item) for item in models_for(authorize(authorization)).values()]
+            "models": [safe_model(item) for item in models_for(authorize(authorization)).values()],
+            "presets": MODEL_PRESETS,
+        }
+
+    @app.post("/api/model-catalog")
+    async def model_catalog(value: CatalogInput, authorization: str | None = Header(default=None)):
+        owner = authorize(authorization)
+        config = models_for(owner).get(value.id) if value.id else None
+        api_key = value.api_key
+        if not api_key and config and config["base_url"].rstrip("/") == value.base_url.rstrip("/"):
+            api_key = config["api_key"]
+        try:
+            selected = AIProvider(Settings(api_key=api_key, base_url=value.base_url.rstrip("/")))
+            async with semaphore:
+                available = await selected.list_models()
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except ProviderError as exc:
+            raise HTTPException(502, str(exc)) from exc
+        return {
+            "models": available,
+            "message": "列表来自当前 Key；题图分析仍需模型支持图片与 Chat Completions。",
         }
 
     @app.post("/api/models")
@@ -414,7 +453,16 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
             raise HTTPException(400, "配置 ID 无效")
         if key not in current and len(current) >= 10:
             raise HTTPException(400, "最多保存 10 套模型配置")
-        api_key = value.api_key or current.get(key, {}).get("api_key", "")
+        previous = current.get(key, {})
+        if (
+            not value.api_key
+            and previous.get("api_key")
+            and previous.get("base_url", "").rstrip("/") != value.base_url.rstrip("/")
+        ):
+            raise HTTPException(
+                400, "更换 API 地址时请重新填写 Key，避免将已有密钥发送到其他服务。"
+            )
+        api_key = value.api_key or previous.get("api_key", "")
         try:
             Settings(base_url=value.base_url, model=value.model)
         except ValueError as exc:
@@ -425,6 +473,8 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
             "model": value.model,
             "base_url": value.base_url.rstrip("/"),
             "api_key": api_key,
+            "reasoning_effort": value.reasoning_effort,
+            "max_output_tokens": value.max_output_tokens,
         }
         store.put(owner, "models", key, model)
         event(owner, {"type": "models"})
@@ -457,6 +507,8 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
                 base_url=config["base_url"],
                 model=config["model"],
                 demo=settings.demo,
+                reasoning_effort=config["reasoning_effort"],
+                max_output_tokens=config["max_output_tokens"],
             )
         )
         try:
