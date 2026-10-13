@@ -15,6 +15,7 @@ let models=[],modelPresets=[],prefs={model_ids:["default"],mode:"concise",prompt
 const effortNames={auto:"自动",low:"低",medium:"中",high:"高",xhigh:"更高"};
 const records=new Map(), tests=new Map(), ocrConsumed=new Set(), detailStates=new Map();
 let lastMobileView="";
+let originalUrl=null;
 const fragment=new URLSearchParams(location.hash.slice(1)).get("token");
 if(fragment){token=fragment;history.replaceState(null,"",location.pathname);}
 function node(tag,text,cls){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e;}
@@ -44,6 +45,7 @@ async function loadModels(){const data=await api("/api/models");models=data.mode
 function editModel(model){
   $("model-id").value=model?.id||"";$("model-name").value=model?.name||"";$("model-url").value=model?.base_url||"https://api.openai.com/v1";$("model-name-api").value=model?.model||"gpt-4.1-mini";$("model-key").value="";$("model-error").textContent="";
   $("reasoning-effort").value=model?.reasoning_effort||"auto";$("output-budget").value=model?.max_output_tokens||16384;$("use-saved-model").checked=true;
+  $("compact-output").checked=!!model?.compact_output;$("qwen-thinking").value=model?.qwen_thinking||"auto";
   $("model-preset").replaceChildren(node("option","手动填写 / 其他模型"));$("model-preset").firstChild.value="";
   modelPresets.forEach(p=>{const option=node("option",`${p.label} · ${p.model}`);option.value=p.model;$("model-preset").append(option);});
   $("model-preset").value=modelPresets.some(p=>p.model===$("model-name-api").value)?$("model-name-api").value:"";
@@ -80,9 +82,16 @@ function renderResult(result,operation,key){
   const info=node("div");if(result.api_model||result.requested_model)info.append(node("p",`模型：${result.api_model||result.requested_model}${result.reasoning_effort?` · 推理设置 ${effortNames[result.reasoning_effort]||result.reasoning_effort}`:""}`,"hint"));
   if(result.api_model&&result.requested_model&&result.api_model!==result.requested_model)info.append(node("p",`请求模型 ID：${result.requested_model}`,"hint"));
   if(result.elapsed_ms!==undefined)info.append(node("p",`${(result.elapsed_ms/1000).toFixed(1)} 秒`,"hint"));
+  const d=result.diagnostics;
+  if(d){info.append(node("p",`接口耗时 ${(d.api_ms/1000).toFixed(1)} 秒 · 排队 ${((result.queue_wait_ms||0)/1000).toFixed(1)} 秒 · 重试等待 ${(d.retry_wait_ms/1000).toFixed(1)} 秒 · 请求 ${d.attempts} 次`,"hint"));
+    info.append(node("p",`实际发送预算 ${d.output_budget} · ${d.compact_output?"简短输出":"完整输出"} · 千问思考 ${d.qwen_thinking}`,"hint"));
+    const counts=[["输入",d.input_tokens],["输出",d.output_tokens],["推理",d.reasoning_tokens]].filter(([,v])=>v!==undefined).map(([name,v])=>`${name} ${v}`).join(" · ");if(counts)info.append(node("p",counts+" token","hint"));
+    info.append(node("p",d.model_confirmed?"模型 ID 来自接口响应":"接口未返回模型 ID，上方展示的是请求配置","hint"));
+    if(d.request_id)info.append(node("p","请求 ID："+d.request_id,"hint"));if(d.endpoint_host)info.append(node("p","接口域名："+d.endpoint_host,"hint"));
+  }
   if(info.childNodes.length)card.append(folded("模型与耗时",info,key+"-info"));return card;
 }
-function preview(src){$("image-preview").src=src||"";$("image-preview").hidden=!src;$("preview-empty").hidden=!!src;$("crop-image").disabled=!src;$("clear-image").disabled=!src;}
+function preview(src){$("image-preview").src=src||"";$("image-preview").hidden=!src;$("preview-empty").hidden=!!src;$("crop-image").disabled=!src;$("view-original").disabled=!src;$("clear-image").disabled=!src;}
 function render(){
   const list=[...records.values()].sort((a,b)=>b.created_at-a.created_at).slice(0,30);$("job-count").textContent=`${list.length} 条`;$("history-list").replaceChildren();
   const active=records.get(prefs.current_job_id)||list[0];
@@ -93,6 +102,7 @@ function render(){
   const grid=node("div",undefined,"comparison");active.results.forEach((r,i)=>grid.append(renderResult(r,active.operation,active.id+"-"+i)));card.append(grid);
   if(active.synthesis){const section=node("div",undefined,"synthesis");section.append(node("h3","协同综合建议"),renderResult(active.synthesis,"analyze",active.id+"-synthesis"));card.append(section);}
   if(active.synthesis_error)card.append(node("p",active.synthesis_error,"error"));
+  if(active.image_info){const im=active.image_info;card.append(folded("提交图片规格",node("p",`${im.width} × ${im.height} · ${im.mime} · ${(im.bytes/1024).toFixed(1)} KB · 缩略图不用于模型分析`,"hint"),active.id+"-image"));}
   if(active.input_text)card.append(folded("输入题目与材料",node("div",active.input_text,"question-text"),active.id+"-input"));
   if(active.operation==="ocr"&&active.status==="done"&&!ocrConsumed.has(active.id)){ocrConsumed.add(active.id);if(!$("question").value.trim())$("question").value=active.answer;}
   if(active.status==="done"||active.status==="error"){const del=node("button","删除此记录与题图","text-button");del.addEventListener("click",async()=>{if(!confirm("删除这条复盘记录和题图？"))return;try{await api(`/api/jobs/${active.id}`,{method:"DELETE"});}catch(e){$("upload-status").textContent=e.message;}});card.append(del);}
@@ -148,7 +158,10 @@ $("model-name-api").addEventListener("input",()=>{$("model-preset").value=modelP
 for(const id of ["model-url","model-key"])$(id).addEventListener("input",resetCatalog);
 $("load-catalog").addEventListener("click",async()=>{const button=$("load-catalog");button.disabled=true;$("catalog-status").textContent="正在读取…";try{const data=await api("/api/model-catalog",{method:"POST",body:JSON.stringify({id:$("model-id").value||null,base_url:$("model-url").value,api_key:$("model-key").value})});const select=$("available-model"),first=node("option","选择账号返回的模型 ID");first.value="";select.replaceChildren(first);data.models.forEach(id=>{const option=node("option",id);option.value=id;select.append(option);});select.disabled=!data.models.length;$("catalog-status").textContent=`已读取 ${data.models.length} 个模型。${data.message} ${data.models.includes($("model-name-api").value)?"当前模型已列出。":"当前填写的模型未列出，请核对账号权限。"}`;}catch(e){resetCatalog();$("catalog-status").textContent=e.message;}finally{button.disabled=false;}});
 $("available-model").addEventListener("change",()=>{const id=$("available-model").value;if(!id)return;$("model-name-api").value=id;$("model-preset").value=modelPresets.some(p=>p.model===id)?id:"";if($("model-preset").value)$("model-preset").dispatchEvent(new Event("change"));else if(!$("model-name").value)$("model-name").value=id;});
-$("model-form").addEventListener("submit",async e=>{e.preventDefault();try{const saved=await api("/api/models",{method:"POST",body:JSON.stringify({id:$("model-id").value||null,name:$("model-name").value,base_url:$("model-url").value,model:$("model-name-api").value,api_key:$("model-key").value,reasoning_effort:$("reasoning-effort").value,max_output_tokens:Number($("output-budget").value)})});const apply=$("use-saved-model").checked;$("model-key").value="";$("model-dialog").close();if(apply)prefs.model_ids=[saved.id];await loadModels();if(apply)await savePrefs();}catch(err){$("model-error").textContent=err.message;}});
+$("speed-preset").addEventListener("click",()=>{$("output-budget").value=2048;$("compact-output").checked=true;});
+$("model-form").addEventListener("submit",async e=>{e.preventDefault();try{const saved=await api("/api/models",{method:"POST",body:JSON.stringify({id:$("model-id").value||null,name:$("model-name").value,base_url:$("model-url").value,model:$("model-name-api").value,api_key:$("model-key").value,reasoning_effort:$("reasoning-effort").value,max_output_tokens:Number($("output-budget").value),compact_output:$("compact-output").checked,qwen_thinking:$("qwen-thinking").value})});const apply=$("use-saved-model").checked;$("model-key").value="";$("model-dialog").close();if(apply)prefs.model_ids=[saved.id];await loadModels();if(apply)await savePrefs();}catch(err){$("model-error").textContent=err.message;}});
+$("view-original").addEventListener("click",async()=>{try{const blob=await imageBlob();if(!blob)return;if(originalUrl)URL.revokeObjectURL(originalUrl);originalUrl=URL.createObjectURL(blob);const image=$("original-image");image.src=originalUrl;await image.decode();$("original-info").textContent=`${image.naturalWidth} × ${image.naturalHeight} · ${(blob.size/1024).toFixed(1)} KB。按原始像素显示，可在框内滚动；放大不能恢复原图已缺失的细节。`;$("original-dialog").showModal();}catch(e){$("upload-status").textContent=e.message;}});
+$("original-dialog").addEventListener("close",()=>{if(originalUrl)URL.revokeObjectURL(originalUrl);originalUrl=null;$("original-image").removeAttribute("src");});
 for(const id of ["account-button","login-from-pair"])$(id).addEventListener("click",()=>{$("account-error").textContent="";$("account-dialog").showModal();});
 $("account-form").addEventListener("submit",async e=>{e.preventDefault();const action=e.submitter?.value||"login";try{const data=await api(`/api/auth/${action}`,{method:"POST",body:JSON.stringify({username:$("username").value,password:$("password").value})});$("password").value="";$("account-dialog").close();await pair(data.token);}catch(err){$("account-error").textContent=err.message;}});
 $("link-desktop").addEventListener("click",async()=>{try{await api("/api/desktop/link",{method:"POST"});$("upload-status").textContent="正在绑定本机截图客户端，稍后可使用快捷键。";}catch(e){$("upload-status").textContent=e.message;}});
@@ -158,7 +171,7 @@ $("crop-image").addEventListener("click",async()=>{
   try{const blob=await imageBlob();if(!blob)return;const bitmap=await createImageBitmap(blob),canvas=$("crop-canvas"),ctx=canvas.getContext("2d");canvas.width=bitmap.width;canvas.height=bitmap.height;ctx.drawImage(bitmap,0,0);$("crop-dialog").showModal();let start=null;
     const point=e=>{const r=canvas.getBoundingClientRect();return {x:Math.max(0,Math.min(canvas.width,(e.clientX-r.left)*canvas.width/r.width)),y:Math.max(0,Math.min(canvas.height,(e.clientY-r.top)*canvas.height/r.height))};};
     canvas.onpointerdown=e=>{start=point(e);canvas.setPointerCapture(e.pointerId);};canvas.onpointermove=e=>{if(!start)return;const end=point(e);ctx.drawImage(bitmap,0,0);ctx.strokeStyle="#21a878";ctx.lineWidth=Math.max(2,canvas.width/300);ctx.strokeRect(start.x,start.y,end.x-start.x,end.y-start.y);};
-    canvas.onpointerup=e=>{if(!start)return;const end=point(e),x=Math.min(start.x,end.x),y=Math.min(start.y,end.y),w=Math.abs(end.x-start.x),h=Math.abs(end.y-start.y);start=null;if(w<5||h<5)return;const cropped=document.createElement("canvas");cropped.width=Math.round(w);cropped.height=Math.round(h);cropped.getContext("2d").drawImage(bitmap,x,y,w,h,0,0,w,h);cropped.toBlob(blob=>{imageFile=blob;imageJob=null;preview(cropped.toDataURL("image/jpeg",.9));$("crop-dialog").close();},"image/jpeg",.9);};canvas.onpointercancel=()=>{start=null;};
+    canvas.onpointerup=e=>{if(!start)return;const end=point(e),x=Math.min(start.x,end.x),y=Math.min(start.y,end.y),w=Math.abs(end.x-start.x),h=Math.abs(end.y-start.y);start=null;if(w<5||h<5)return;const cropped=document.createElement("canvas");cropped.width=Math.round(w);cropped.height=Math.round(h);cropped.getContext("2d").drawImage(bitmap,x,y,w,h,0,0,w,h);cropped.toBlob(blob=>{imageFile=blob;imageJob=null;preview(cropped.toDataURL("image/png"));$("crop-dialog").close();},"image/png");};canvas.onpointercancel=()=>{start=null;};
   }catch(e){$("upload-status").textContent=e.message;}
 });
 document.addEventListener("visibilitychange",()=>{if(!document.hidden&&token&&(!socket||socket.readyState>1))connectSocket();});

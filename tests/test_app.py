@@ -21,7 +21,7 @@ def picture():
 
 class FakeProvider:
     async def answer(self, image, mode):
-        assert Image.open(io.BytesIO(image)).format == "JPEG"
+        assert Image.open(io.BytesIO(image)).format == "PNG"
         assert mode == "code"
         return "答案是 42。\n```python\nprint(42)\n```"
 
@@ -128,7 +128,7 @@ async def test_queue_bound_and_provider_failure():
 
 
 def test_image_normalization_and_pixel_limit():
-    assert Image.open(io.BytesIO(normalize_image(picture()))).format == "JPEG"
+    assert Image.open(io.BytesIO(normalize_image(picture()))).format == "PNG"
     output = io.BytesIO()
     Image.new("RGB", (6000, 5000)).save(output, format="PNG")
     with pytest.raises(ValueError, match="像素"):

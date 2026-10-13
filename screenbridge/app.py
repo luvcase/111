@@ -19,7 +19,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field
 from starlette.websockets import WebSocketDisconnect
 
-from .images import encode_question_image
+from .images import encode_question_image, image_mime
 from .provider import MODEL_PRESETS, MODES, AIProvider, ProviderError, Settings
 from .store import Store
 
@@ -37,6 +37,8 @@ class ModelInput(BaseModel):
     api_key: str = Field(default="", max_length=1000)
     reasoning_effort: Literal["auto", "low", "medium", "high", "xhigh"] = "auto"
     max_output_tokens: int = Field(default=16384, ge=1024, le=32768)
+    compact_output: bool = False
+    qwen_thinking: Literal["auto", "off", "on"] = "auto"
 
 
 class CatalogInput(BaseModel):
@@ -118,11 +120,19 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
             "api_key": settings.api_key,
             "reasoning_effort": settings.reasoning_effort,
             "max_output_tokens": settings.max_output_tokens,
+            "compact_output": settings.compact_output,
+            "qwen_thinking": settings.qwen_thinking,
         }
         result = {"default": default}
         result.update(
             {
-                item["id"]: {"reasoning_effort": "auto", "max_output_tokens": 16384} | item
+                item["id"]: {
+                    "reasoning_effort": "auto",
+                    "max_output_tokens": 16384,
+                    "compact_output": False,
+                    "qwen_thinking": "auto",
+                }
+                | item
                 for item in store.all(owner, "models")
             }
         )
@@ -178,13 +188,18 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
                 demo=settings.demo,
                 reasoning_effort=config["reasoning_effort"],
                 max_output_tokens=config["max_output_tokens"],
+                compact_output=config["compact_output"],
+                qwen_thinking=config["qwen_thinking"],
             )
         )
+        waiting = time.monotonic()
         async with semaphore:
+            queue_ms = round((time.monotonic() - waiting) * 1000)
             if hasattr(selected, "analyze"):
-                return await selected.analyze(
+                result = await selected.analyze(
                     jpeg, text, options.mode, options.prompt, operation, options.question_type
                 )
+                return result | {"queue_wait_ms": queue_ms}
             return {
                 "question": text,
                 "answer": await selected.answer(jpeg, options.mode),
@@ -263,6 +278,12 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
         thumbnail = ""
         if jpeg:
             with Image.open(io.BytesIO(jpeg)) as image:
+                image_info = {
+                    "width": image.width,
+                    "height": image.height,
+                    "bytes": len(jpeg),
+                    "mime": image_mime(jpeg),
+                }
                 image.thumbnail((640, 640))
                 output = io.BytesIO()
                 image.save(output, "JPEG", quality=65)
@@ -276,6 +297,7 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
             "question_type": options.question_type,
             "input_text": text,
             "thumbnail": thumbnail,
+            "image_info": image_info if jpeg else None,
             "answer": "",
             "error": "",
             "results": [
@@ -395,7 +417,8 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
         raw = store.get(owner, "images", job_id)
         if not raw:
             raise HTTPException(404, "题图不存在")
-        return Response(base64.b64decode(raw), media_type="image/jpeg")
+        data = base64.b64decode(raw)
+        return Response(data, media_type=image_mime(data))
 
     @app.get("/api/workspace")
     async def get_workspace(authorization: str | None = Header(default=None)):
@@ -475,6 +498,8 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
             "api_key": api_key,
             "reasoning_effort": value.reasoning_effort,
             "max_output_tokens": value.max_output_tokens,
+            "compact_output": value.compact_output,
+            "qwen_thinking": value.qwen_thinking,
         }
         store.put(owner, "models", key, model)
         event(owner, {"type": "models"})
@@ -509,6 +534,8 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
                 demo=settings.demo,
                 reasoning_effort=config["reasoning_effort"],
                 max_output_tokens=config["max_output_tokens"],
+                compact_output=config["compact_output"],
+                qwen_thinking=config["qwen_thinking"],
             )
         )
         try:

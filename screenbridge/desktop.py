@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 import httpx
 from PIL import Image
 
-from .images import encode_question_image
+from .images import encode_question_image, image_mime
 
 
 def enable_dpi_awareness():
@@ -110,7 +110,13 @@ def run_desktop(
                 result = client.post(
                     server + "/api/screenshots",
                     headers=headers(),
-                    files={"image": ("screen.jpg", jpeg, "image/jpeg")},
+                    files={
+                        "image": (
+                            "screen.png" if image_mime(jpeg) == "image/png" else "screen.jpg",
+                            jpeg,
+                            image_mime(jpeg),
+                        )
+                    },
                     data=data,
                 )
                 result.raise_for_status()

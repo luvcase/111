@@ -13,3 +13,6 @@
   .model-result h3{margin-bottom:8px;font-size:11px;color:var(--muted)}
   .model-result>.answer{font-size:18px;line-height:1.65;font-weight:600}
 }
+.original-frame{max-height:65vh;overflow:auto;background:#f8faf9;border:1px solid var(--line)}
+#original-image{display:block;max-width:none}
+#original-dialog{width:min(1100px,95vw)}

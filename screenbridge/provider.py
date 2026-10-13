@@ -6,12 +6,15 @@ import math
 import os
 import random
 import re
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit
 
 import httpx
+
+from .images import image_mime
 
 MODES = {
     "concise": "先给出直接答案，再简短说明关键理由。选择题写明选项和理由。",
@@ -62,6 +65,8 @@ class Settings:
     demo: bool = False
     reasoning_effort: str = "auto"
     max_output_tokens: int = 16384
+    compact_output: bool = False
+    qwen_thinking: str = "auto"
 
     def __post_init__(self):
         parsed = urlsplit(self.base_url)
@@ -180,6 +185,7 @@ class AIProvider:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.response_model = None
+        self.diagnostics = {}
 
     async def list_models(self):
         if not self.settings.api_key:
@@ -248,7 +254,7 @@ class AIProvider:
                         {"type": "text", "text": "请识别并解答图片中的题目。"},
                         {
                             "type": "image_url",
-                            "image_url": {"url": f"data:image/jpeg;base64,{image}"},
+                            "image_url": {"url": f"data:{image_mime(jpeg)};base64,{image}"},
                         },
                     ],
                 },
@@ -262,9 +268,19 @@ class AIProvider:
             raise ProviderError("此模型未配置 API Key，请编辑模型配置。")
         payload = dict(payload)
         official = urlsplit(self.settings.base_url).hostname == "api.openai.com"
+        host = urlsplit(self.settings.base_url).hostname or ""
+        qwen = self.settings.model.startswith("qwen") and (
+            host == "dashscope.aliyuncs.com"
+            or host.endswith(".dashscope.aliyuncs.com")
+            or host.endswith(".maas.aliyuncs.com")
+        )
         reasoning = self.settings.model.startswith(("gpt-5", "gpt-6", "o1", "o3", "o4"))
         # Preserve explicit per-request overrides and skip effort settings on the small probe.
         connection_check = payload.get("max_tokens", 100) <= 16
+        if not connection_check and "max_tokens" in payload:
+            payload["max_tokens"] = self.settings.max_output_tokens
+        if qwen and not connection_check and self.settings.qwen_thinking != "auto":
+            payload["enable_thinking"] = self.settings.qwen_thinking == "on"
         if (
             official
             and reasoning
@@ -280,19 +296,24 @@ class AIProvider:
             payload["max_completion_tokens"] = budget
         try:
             timeout = 240 if official and reasoning else 90
+            api_seconds = wait_seconds = 0
             async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=15)) as client:
                 for attempt in range(3):
+                    started = time.monotonic()
                     response = await client.post(
                         self.settings.base_url + "/chat/completions",
                         headers={"Authorization": "Bearer " + self.settings.api_key},
                         json=payload,
                     )
+                    api_seconds += time.monotonic() - started
                     if response.status_code != 429:
                         break
                     delay = retry_delay(response, 2 ** (attempt + 1))
                     if rate_error_kind(response) != "rate" or attempt == 2 or delay > 20:
                         raise ProviderError(rate_error_message(response, attempt))
-                    await asyncio.sleep(delay + random.uniform(0, 0.3))
+                    waiting = delay + random.uniform(0, 0.3)
+                    wait_seconds += waiting
+                    await asyncio.sleep(waiting)
                 response.raise_for_status()
                 data = response.json()
                 choice = data["choices"][0]
@@ -308,19 +329,47 @@ class AIProvider:
                         "模型输出被预算截断，结果不完整；请提高推理与输出预算后重新分析。"
                     )
                 self.response_model = (
-                    data.get("model") if isinstance(data.get("model"), str) else self.settings.model
+                    data.get("model") if isinstance(data.get("model"), str) else None
                 )
+                usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+                details = usage.get("completion_tokens_details", {})
+                self.diagnostics = {
+                    "endpoint_host": host,
+                    "model_confirmed": bool(self.response_model),
+                    "api_ms": round(api_seconds * 1000),
+                    "retry_wait_ms": round(wait_seconds * 1000),
+                    "attempts": attempt + 1,
+                    "request_id": safe_identifier(
+                        response.headers.get("x-request-id") or data.get("id")
+                    ),
+                    "output_budget": payload.get(
+                        "max_completion_tokens", payload.get("max_tokens")
+                    ),
+                    "qwen_thinking": self.settings.qwen_thinking if qwen else "not_applicable",
+                    "compact_output": self.settings.compact_output,
+                }
+                for name, value in {
+                    "input_tokens": usage.get("prompt_tokens"),
+                    "output_tokens": usage.get("completion_tokens"),
+                    "reasoning_tokens": details.get("reasoning_tokens")
+                    if isinstance(details, dict)
+                    else None,
+                }.items():
+                    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                        self.diagnostics[name] = value
                 return content.strip()
         except httpx.TimeoutException as exc:
             raise ProviderError("AI 请求超时，请检查网络或稍后重试。") from exc
         except httpx.HTTPStatusError as exc:
             code = exc.response.status_code
+            if code == 403:
+                raise ProviderError(forbidden_message(exc.response)) from exc
             hints = {
                 401: "API Key 无效",
-                403: "没有模型访问权限",
                 404: "模型不存在或当前项目没有权限，请读取账号模型列表并核对模型 ID",
                 400: (
-                    "模型或参数不兼容；请将推理强度改为自动，并确认模型支持图片和 Chat Completions"
+                    "模型或参数不兼容；请将推理强度与千问思考开关改为自动，"
+                    "并确认模型支持图片和 Chat Completions"
                 ),
             }
             raise ProviderError(
@@ -384,19 +433,43 @@ class AIProvider:
         )
         if mode == "shenlun" or question_type == "shenlun":
             instructions += SHENLUN_GUIDE
+        if mode == "visual" or question_type == "visual":
+            instructions += (
+                "图形推理先核对每幅图的格子、位置、数量与变化，再用全部已知图和选项交叉验证。"
+                "采用能解释已知图并区分选项的简洁规律，不要求数学上的绝对唯一性。"
+                "局部模糊时先结合其他图与选项核对；只有决定答案的差异确实看不清时才请求补图，"
+                "并指出具体哪幅图、哪行哪列。不要笼统宣称无规律，也不要凭模糊图猜答案。"
+            )
+        if self.settings.compact_output and operation != "ocr":
+            instructions += (
+                "采用简短输出：answer 直接作答，不重复题目；steps 最多两条可核验依据，"
+                "cautions 只写实际影响答案的不确定条件，无则为空数组。"
+                "申论或编程仍须给出题目要求的完整正文或代码，不能以简短为由省略。"
+            )
         if operation == "ocr":
             instructions = (
                 "仅准确转录图片文字，保留段落、全部选项、代码缩进、上下标、单位和公式，不解答题目。"
                 "看不清的字标记为[不清晰]。返回纯 JSON："
                 '{"question":"转录文字","answer":"","steps":[],"cautions":[]}。'
             )
-        content = [{"type": "text", "text": text or "请识别这张题图。"}]
+        task = (
+            "请仅转录图片文字，不解答。"
+            if operation == "ocr"
+            else (
+                "请完成图片中的题目并给出最终答案，不要只识别或复述题目。"
+                "如为文章写作，请按题意自拟标题并撰写正文。"
+            )
+        )
+        content = [{"type": "text", "text": task + ("\n题目或补充材料：\n" + text if text else "")}]
         if jpeg:
             encoded = base64.b64encode(jpeg).decode("ascii")
             content.append(
                 {
                     "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{encoded}", "detail": "high"},
+                    "image_url": {
+                        "url": f"data:{image_mime(jpeg)};base64,{encoded}",
+                        "detail": "high",
+                    },
                 }
             )
         raw = await self.complete(
@@ -410,8 +483,35 @@ class AIProvider:
             }
         )
         return parse_analysis(raw, operation) | {
-            "api_model": self.response_model or self.settings.model
+            "api_model": self.response_model or self.settings.model,
+            "diagnostics": self.diagnostics,
         }
+
+
+def safe_identifier(value):
+    return (
+        value if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1,160}", value) else None
+    )
+
+
+def forbidden_message(response):
+    try:
+        body = response.json()
+        error = body.get("error", {})
+        label = body.get("code") or (error.get("code") if isinstance(error, dict) else None)
+    except (ValueError, AttributeError):
+        label = None
+    code = safe_identifier(label)
+    if code == "AllocationQuota.FreeTierOnly":
+        return (
+            "AI 服务返回 403：免费额度已用完或不可用，且已开启免费额度用完即停"
+            "（AllocationQuota.FreeTierOnly）。请检查该模型免费额度与计费设置。"
+        )
+    return (
+        f"AI 服务返回 403{f'（{code}）' if code else ''}：请求被服务拒绝。"
+        "请检查 Key 的业务空间、模型权限、免费额度用完即停、接口地域与服务开通状态；"
+        "不能仅凭 403 判断为没有模型权限。"
+    )
 
 
 def parse_analysis(raw, operation="analyze"):
