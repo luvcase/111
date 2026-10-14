@@ -19,6 +19,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field
 from starlette.websockets import WebSocketDisconnect
 
+from .grids import annotate_grids, grid_context, read_grids
 from .images import encode_question_image, image_mime
 from .provider import MODEL_PRESETS, MODES, AIProvider, ProviderError, Settings
 from .store import Store
@@ -59,6 +60,7 @@ class Options(BaseModel):
     prompt: str = Field(default="", max_length=4000)
     question_type: str = "auto"
     collaborate: bool = False
+    grid_reading: bool = False
 
 
 class Workspace(Options):
@@ -97,6 +99,7 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
     native = {}
     login_attempts = {}
     semaphore = asyncio.Semaphore(3)
+    grid_semaphore = asyncio.Semaphore(2)
 
     def history_for(owner):
         if owner not in histories:
@@ -238,6 +241,11 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
                 publish(owner, job)
 
         try:
+            if jpeg and options.grid_reading and job["operation"] != "ocr":
+                async with grid_semaphore:
+                    job["grid_report"] = await asyncio.to_thread(read_grids, jpeg)
+                text += grid_context(job["grid_report"])
+                publish(owner, job)
             await asyncio.gather(
                 *[
                     run_one(config, result)
@@ -432,6 +440,40 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
         data = base64.b64decode(raw)
         return Response(data, media_type=image_mime(data))
 
+    @app.get("/api/jobs/{job_id}/grid-image")
+    async def grid_image(job_id: str, authorization: str | None = Header(default=None)):
+        owner = authorize(authorization)
+        job = history_for(owner).get(job_id)
+        raw = store.get(owner, "images", job_id)
+        if not job or not raw or "grid_report" not in job:
+            raise HTTPException(404, "读格检查图不存在")
+        async with grid_semaphore:
+            image = await asyncio.to_thread(
+                annotate_grids, base64.b64decode(raw), job["grid_report"]
+            )
+        return Response(image, media_type=image_mime(image))
+
+    @app.post("/api/grids")
+    async def preview_grids(
+        image: UploadFile = File(...), authorization: str | None = Header(default=None)
+    ):
+        authorize(authorization)
+        raw = await image.read(MAX_UPLOAD + 1)
+        await image.close()
+        if len(raw) > MAX_UPLOAD:
+            raise HTTPException(413, "图片不能超过 8 MB")
+        try:
+            data = await asyncio.to_thread(normalize_image, raw)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        async with grid_semaphore:
+            report = await asyncio.to_thread(read_grids, data)
+            annotated = await asyncio.to_thread(annotate_grids, data, report)
+        return report | {
+            "inspection_image": f"data:{image_mime(annotated)};base64,"
+            + base64.b64encode(annotated).decode()
+        }
+
     @app.get("/api/workspace")
     async def get_workspace(authorization: str | None = Header(default=None)):
         return workspace_for(authorize(authorization))
@@ -575,6 +617,7 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
         question_type: str | None = Form(None),
         operation: str = Form("analyze"),
         collaborate: bool | None = Form(None),
+        grid_reading: bool | None = Form(None),
         authorization: str | None = Header(default=None),
     ):
         owner = authorize(authorization)
@@ -584,6 +627,7 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
             "prompt": prompt,
             "question_type": question_type,
             "collaborate": collaborate,
+            "grid_reading": grid_reading,
         }.items():
             if value is not None:
                 data[key] = value

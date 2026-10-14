@@ -8,7 +8,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import httpx
-from PIL import Image
+from PIL import Image, ImageDraw
 from playwright.sync_api import expect, sync_playwright
 
 
@@ -57,6 +57,40 @@ def main():
         mobile.get_by_role("button", name="登录", exact=True).click()
         expect(mobile.locator("#account-button")).to_have_text(username)
         expect(mobile.locator("#connection")).to_have_text("● 已连接")
+        # Local grid preview exercises real pixel extraction, with no model mock.
+        grid_picture = Image.new("RGB", (320, 220), "white")
+        draw = ImageDraw.Draw(grid_picture)
+        for r in range(4):
+            for c in range(4):
+                draw.rectangle(
+                    (30 + c * 24, 30 + r * 24, 30 + (c + 1) * 24, 30 + (r + 1) * 24),
+                    fill="black" if (r + c) % 2 == 0 else "white",
+                )
+        for k in range(5):
+            draw.line((30, 30 + k * 24, 126, 30 + k * 24), fill="black")
+            draw.line((30 + k * 24, 30, 30 + k * 24, 126), fill="black")
+        grid_bytes = io.BytesIO()
+        grid_picture.save(grid_bytes, "PNG")
+        page.locator("#image-input").set_input_files(
+            {"name": "grids.png", "mimeType": "image/png", "buffer": grid_bytes.getvalue()}
+        )
+        page.locator("#inspect-grids").click()
+        expect(page.locator("#grid-summary")).to_contain_text("检测到 1 个网格")
+        expect(page.locator("#grid-summary pre")).to_have_text("1 0 1 0\n0 1 0 1\n1 0 1 0\n0 1 0 1")
+        expect(page.locator("#grid-image")).to_be_visible()
+        page.screenshot(path=str(runtime / "local-grid-check.png"))
+        page.locator("#grid-dialog .close-dialog").click()
+        page.locator("#grid-reading").check()
+        expect(mobile.locator("#grid-reading")).to_be_checked()
+        page.locator("#analyze").click()
+        expect(page.locator(".job .badge")).to_have_text("已完成", timeout=10000)
+        page.get_by_text("本地读格数据", exact=True).click()
+        expect(page.locator(".job pre")).to_have_text("1 0 1 0\n0 1 0 1\n1 0 1 0\n0 1 0 1")
+        page.get_by_role("button", name="查看采样检查图").click()
+        expect(page.locator("#grid-image")).to_be_visible()
+        page.locator("#grid-dialog .close-dialog").click()
+        page.locator("#grid-reading").uncheck()
+        page.locator("#clear-image").click()
         # Verify the visible picker, credential-list UI and applied model across devices.
         # The provider listing is mocked here; server-side credential handling has API tests.
         page.route(
@@ -174,7 +208,8 @@ def main():
         mobile.screenshot(path=str(runtime / "mobile-answer-first.png"))
         page.once("dialog", lambda dialog: dialog.accept())
         page.get_by_role("button", name="删除此记录与题图", exact=True).click()
-        expect(mobile.locator("#history-list button")).to_have_count(2)
+        # The added grid-analysis job also remains in history.
+        expect(mobile.locator("#history-list button")).to_have_count(3)
         # Exercise failed-result diagnostics with a simulated timeout, without a real API call.
         mobile.evaluate("""() => {
           const job={id:'timeout-ui-fixture',created_at:Date.now()/1000,

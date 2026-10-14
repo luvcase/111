@@ -26,7 +26,7 @@ async function api(path,options={}){
   if(!response.ok)throw new Error(typeof data.detail==="string"?data.detail:"请求参数无效或服务暂不可用");
   return data;
 }
-function optionsFromUI(){return {model_ids:models.filter(m=>document.querySelector(`input[data-model="${m.id}"]`)?.checked).map(m=>m.id),mode:$("mode").value,prompt:$("prompt").value,question_type:$("question-type").value,collaborate:$("collaborate").checked};}
+function optionsFromUI(){return {model_ids:models.filter(m=>document.querySelector(`input[data-model="${m.id}"]`)?.checked).map(m=>m.id),mode:$("mode").value,prompt:$("prompt").value,question_type:$("question-type").value,collaborate:$("collaborate").checked,grid_reading:$("grid-reading").checked};}
 async function savePrefs(){
   try{prefs=await api("/api/workspace",{method:"PUT",body:JSON.stringify({...prefs,...optionsFromUI(),right_hold:$("right-hold").checked})});$("settings-status").textContent="设置已同步";return true;}
   catch(e){$("settings-status").textContent=e.message;return false;}
@@ -34,7 +34,7 @@ async function savePrefs(){
 function applyPrefs(value){
   prefs=value;
   for(const [id,key] of [["mode","mode"],["prompt","prompt"],["question-type","question_type"]])if(document.activeElement!==$(id))$(id).value=prefs[key];
-  $("collaborate").checked=prefs.collaborate;$("right-hold").checked=prefs.right_hold;
+  $("grid-reading").checked=!!prefs.grid_reading;$("collaborate").checked=prefs.collaborate;$("right-hold").checked=prefs.right_hold;
   renderModels();renderPrompts();render();
 }
 function renderPrompts(){
@@ -95,7 +95,7 @@ function renderInfo(result,key){
   }
   const detail=folded("模型与耗时",info,key+"-info");if(result.status==="error"&&!detailStates.has(key+"-info"))detail.open=true;return detail;
 }
-function preview(src){$("image-preview").src=src||"";$("image-preview").hidden=!src;$("preview-empty").hidden=!!src;$("crop-image").disabled=!src;$("view-original").disabled=!src;$("clear-image").disabled=!src;}
+function preview(src){$("image-preview").src=src||"";$("image-preview").hidden=!src;$("preview-empty").hidden=!!src;$("inspect-grids").disabled=!src;$("crop-image").disabled=!src;$("view-original").disabled=!src;$("clear-image").disabled=!src;}
 function render(){
   const list=[...records.values()].sort((a,b)=>b.created_at-a.created_at).slice(0,30);$("job-count").textContent=`${list.length} 条`;$("history-list").replaceChildren();
   const active=records.get(prefs.current_job_id)||list[0];
@@ -106,6 +106,7 @@ function render(){
   const grid=node("div",undefined,"comparison");active.results.forEach((r,i)=>grid.append(renderResult(r,active.operation,active.id+"-"+i)));card.append(grid);
   if(active.synthesis){const section=node("div",undefined,"synthesis");section.append(node("h3","协同综合建议"),renderResult(active.synthesis,"analyze",active.id+"-synthesis"));card.append(section);}
   if(active.synthesis_error)card.append(node("p",active.synthesis_error,"error"));
+  if(active.grid_report){const section=gridSummary(active.grid_report),button=node("button","查看采样检查图","secondary");button.addEventListener("click",async()=>{try{const response=await fetch(`/api/jobs/${active.id}/grid-image`,{headers:{Authorization:`Bearer ${token}`}});if(!response.ok)throw new Error("检查图不可用");showGrids(active.grid_report,await response.blob());}catch(e){$("upload-status").textContent=e.message;}});section.append(button);card.append(folded("本地读格数据",section,active.id+"-grids"));}
   if(active.image_info){const im=active.image_info;card.append(folded("提交图片规格",node("p",`${im.width} × ${im.height} · ${im.mime} · ${(im.bytes/1024).toFixed(1)} KB · 缩略图不用于模型分析`,"hint"),active.id+"-image"));}
   if(active.input_text)card.append(folded("输入题目与材料",node("div",active.input_text,"question-text"),active.id+"-input"));
   if(active.operation==="ocr"&&active.status==="done"&&!ocrConsumed.has(active.id)){ocrConsumed.add(active.id);if(!$("question").value.trim())$("question").value=active.answer;}
@@ -141,7 +142,7 @@ async function imageBlob(){
 async function submit(operation){
   $("analyze").disabled=true;$("ocr").disabled=true;$("upload-status").textContent="正在提交…";
   try{if(!await savePrefs())throw new Error($("settings-status").textContent);const opts=optionsFromUI(),text=$("question").value.trim(),image=await imageBlob();let job;
-    if(image){const form=new FormData();form.append("image",image,"question.jpg");form.append("model_ids",JSON.stringify(opts.model_ids));for(const key of ["mode","prompt","question_type","collaborate"])form.append(key,String(opts[key]));form.append("text",text);form.append("operation",operation);job=await api("/api/screenshots",{method:"POST",body:form});}
+    if(image){const form=new FormData();form.append("image",image,"question.jpg");form.append("model_ids",JSON.stringify(opts.model_ids));for(const key of ["mode","prompt","question_type","collaborate","grid_reading"])form.append(key,String(opts[key]));form.append("text",text);form.append("operation",operation);job=await api("/api/screenshots",{method:"POST",body:form});}
     else{if(operation==="ocr")throw new Error("请先截图或导入图片");if(!text)throw new Error("请导入题图或输入题目");job=await api("/api/analyze",{method:"POST",body:JSON.stringify({...opts,text})});}
     prefs.current_job_id=job.id;if(!records.has(job.id))records.set(job.id,job);imageFile=null;ignoredImage=null;render();$("upload-status").textContent="已提交，分析结果会自动同步。";
   }catch(e){$("upload-status").textContent=e.message;}finally{$("analyze").disabled=false;$("ocr").disabled=false;}
@@ -151,7 +152,7 @@ $("disconnect").addEventListener("click",async()=>{try{await api("/api/auth/logo
 $("image-input").addEventListener("change",e=>{const file=e.target.files[0];if(!file)return;if(file.size>8*1024*1024){$("upload-status").textContent="图片不能超过 8 MB";return;}const reader=new FileReader();reader.onload=()=>{imageFile=file;imageJob=null;preview(reader.result);$("upload-status").textContent="题图已导入，可直接分析或 OCR。";};reader.readAsDataURL(file);e.target.value="";});
 $("clear-image").addEventListener("click",()=>{imageFile=null;imageJob=null;ignoredImage=prefs.current_job_id;preview("");});
 $("analyze").addEventListener("click",()=>submit("analyze"));$("ocr").addEventListener("click",()=>submit("ocr"));
-for(const id of ["mode","right-hold","collaborate","prompt"])$(id).addEventListener("change",savePrefs);
+for(const id of ["mode","right-hold","collaborate","grid-reading","prompt"])$(id).addEventListener("change",savePrefs);
 $("question-type").addEventListener("change",()=>{if($("question-type").value==="shenlun")$("mode").value="shenlun";savePrefs();});
 $("prompt-library").addEventListener("change",()=>{const p=[...builtinPrompts,...prefs.custom_prompts][Number($("prompt-library").value)];$("prompt").value=$("prompt-library").value===""?"":p.text;savePrefs();});
 $("save-prompt").addEventListener("click",()=>{if(!$("prompt").value.trim()){ $("settings-status").textContent="请先填写提示词";return;}const name=window.prompt("为提示词取一个名字");if(!name)return;prefs.custom_prompts.push({name,text:$("prompt").value});savePrefs().then(()=>renderPrompts());});
@@ -180,3 +181,21 @@ $("crop-image").addEventListener("click",async()=>{
 });
 document.addEventListener("visibilitychange",()=>{if(!document.hidden&&token&&(!socket||socket.readyState>1))connectSocket();});
 if(token)pair(token);
+
+let gridImageUrl=null;
+function gridSummary(report){
+  const section=node("div");section.append(node("p",`检测到 ${report.grids.length} 个网格 · 本地处理 ${report.elapsed_ms} 毫秒。${report.limited?"已到处理上限，结果可能不完整。":""}`,"hint"),node("p",report.message,"hint"));
+  if(!report.grids.length)section.append(node("p","未检测到可靠网格。请裁剪至题图区域重试，或直接查看原图；不会生成虚构矩阵。"));
+  for(const g of report.grids){section.append(node("h3",`${g.id} · ${g.size} × ${g.size} · 边界 ${g.bounds.join(", ")}`),node("pre",g.matrix.map(row=>row.map(v=>v===null?"?":v).join(" ")).join("\n")));if(g.uncertain.length)section.append(node("p",`不确定格（行,列）：${g.uncertain.map(pair=>pair.join(",")).join("；")}`,"error"));}
+  return section;
+}
+function showGrids(report,image){
+  if(gridImageUrl)URL.revokeObjectURL(gridImageUrl);
+  gridImageUrl=image instanceof Blob?URL.createObjectURL(image):null;
+  $("grid-image").src=gridImageUrl||image;$("grid-summary").replaceChildren(gridSummary(report));$("grid-dialog").showModal();
+}
+$("grid-dialog").addEventListener("close",()=>{if(gridImageUrl)URL.revokeObjectURL(gridImageUrl);gridImageUrl=null;$("grid-image").removeAttribute("src");});
+$("inspect-grids").addEventListener("click",async()=>{
+  const button=$("inspect-grids");button.disabled=true;$("upload-status").textContent="正在本地读格，不调用 AI…";
+  try{const image=await imageBlob();if(!image)return;const form=new FormData();form.append("image",image,"grid.png");const report=await api("/api/grids",{method:"POST",body:form});showGrids(report,report.inspection_image);$("upload-status").textContent="请对照检查图核验读格结果。";}catch(e){$("upload-status").textContent=e.message;}finally{button.disabled=!imageFile&&!imageJob;}
+});
