@@ -1,7 +1,9 @@
+import json
 import queue
 import signal
 import sys
 import threading
+import time
 from urllib.parse import urlsplit
 
 import httpx
@@ -102,6 +104,25 @@ def run_desktop(
     enable_dpi_awareness()
     server = validate_server(server)
     credentials = {"token": token}
+    diagnostic_lock = threading.Lock()
+    diagnostics = {"hotkeys": "未启动", "last_shortcut": "尚未收到", "last_capture": "尚未截图"}
+
+    def diagnose(**values):
+        with diagnostic_lock:
+            diagnostics.update(values, updated_at=time.time())
+            if session_file:
+                try:
+                    path = session_file.parent / "desktop-status.json"
+                    temporary = path.with_suffix(".tmp")
+                    temporary.write_text(
+                        json.dumps(diagnostics, ensure_ascii=False), encoding="utf-8"
+                    )
+                    temporary.replace(path)
+                except OSError:
+                    print("无法保存截图诊断。")
+
+    if sys.platform == "darwin":
+        diagnose(permissions=permission_status())
 
     def headers():
         return {"Authorization": "Bearer " + credentials["token"]}
@@ -149,26 +170,31 @@ def run_desktop(
                 )
                 result.raise_for_status()
             print("截图已发送，任务 " + result.json()["id"] + "。")
+            diagnose(last_capture="截图已发送", last_error="")
         except httpx.HTTPStatusError as exc:
             try:
                 message = exc.response.json().get("detail", "请求失败")
             except ValueError:
                 message = "请求失败"
             print(f"发送失败（{exc.response.status_code}）：{message}")
+            diagnose(last_capture="发送失败", last_error=str(message)[:500])
         except Exception:
             print("截图发送失败，请检查客户端连接及服务端模型配置。")
+            diagnose(last_capture="发送失败", last_error="请检查客户端连接及服务端模型配置。")
         finally:
             busy.release()
 
     def full_capture():
         if not busy.acquire(blocking=False):
             return
+        diagnose(last_capture="正在全屏截图", last_error="")
 
         def worker():
             try:
                 jpeg = capture(monitor)
             except Exception as exc:
                 print("截图失败：" + str(exc))
+                diagnose(last_capture="截图失败", last_error=str(exc)[:500])
                 busy.release()
                 return
             upload(jpeg)
@@ -180,6 +206,7 @@ def run_desktop(
             return
         if not busy.acquire(blocking=False):
             return
+        diagnose(last_capture="正在区域选框", last_error="")
         try:
             frozen, bounds = capture_image(monitor)
             logical_size = (bounds["width"], bounds["height"])
@@ -263,6 +290,7 @@ def run_desktop(
                 overlay["window"] = None
             busy.release()
             print("区域截图失败：" + str(exc))
+            diagnose(last_capture="区域截图失败", last_error=str(exc)[:500])
 
     def poll_server():
         with httpx.Client(timeout=5, trust_env=False) as client:
@@ -307,10 +335,21 @@ def run_desktop(
             timer.daemon = True
             timer.start()
 
+    listener_health = {"alive": None}
+
     def pump():
         if stopped.is_set():
             root.quit()
             return
+        if key_listener is not None:
+            alive = key_listener.is_alive()
+            if alive != listener_health["alive"]:
+                listener_health["alive"] = alive
+                diagnose(
+                    hotkeys="监听线程运行中（请查看是否收到快捷键）"
+                    if alive
+                    else "监听线程已停止；请检查辅助功能、输入监控权限并退出重开软件"
+                )
         try:
             while True:
                 command = commands.get_nowait()
@@ -324,19 +363,26 @@ def run_desktop(
             pass
         root.after(80, pump)
 
+    def shortcut(kind):
+        diagnose(last_shortcut=kind, shortcut_at=time.time())
+        submit_command(kind)
+
     key_listener = mouse_listener = None
     if listen:
-        key_listener = keyboard.GlobalHotKeys(
-            {
-                hotkey: lambda: submit_command("full"),
-                region_hotkey: lambda: submit_command("region"),
-            }
-        )
+        hotkeys = {hotkey: lambda: shortcut("全屏"), region_hotkey: lambda: shortcut("区域")}
+        if sys.platform == "darwin":
+            from .macos import hotkey_listener
+
+            key_listener = hotkey_listener(keyboard, hotkeys)
+        else:
+            key_listener = keyboard.GlobalHotKeys(hotkeys)
         mouse_listener = mouse.Listener(on_click=on_click)
         key_listener.start()
         mouse_listener.start()
+        diagnose(hotkeys="监听已启动（事件是否送达请查看最后收到的快捷键）")
     else:
         print("未获得辅助功能权限：全局快捷键和右键监听未开启，授权后请重启软件。")
+        diagnose(hotkeys="启动时未获辅助功能权限，监听未开启；请退出整个软件后重新打开")
     threading.Thread(target=poll_server, daemon=True).start()
     print(f"全屏截图：{hotkey}；区域截图：{region_hotkey}；右键长按在工作台中开启。")
     signal.signal(signal.SIGINT, lambda *_: stopped.set())

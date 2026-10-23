@@ -464,8 +464,29 @@ def show_app(directory):
             except OSError:
                 messagebox.showerror("权限设置", "无法打开系统设置，请手动打开隐私与安全性。")
 
+        def capture_diagnostics():
+            try:
+                saved = json.loads((directory / "desktop-status.json").read_text(encoding="utf-8"))
+                updated = time.strftime("%m-%d %H:%M:%S", time.localtime(saved["updated_at"]))
+                report = (
+                    f"截图客户端最后更新：{updated}\n"
+                    f"快捷键监听：{saved.get('hotkeys', '未知')}\n"
+                    f"最后收到的快捷键：{saved.get('last_shortcut', '尚未收到')}\n"
+                    f"截图状态：{saved.get('last_capture', '未知')}\n"
+                    f"错误：{saved.get('last_error') or '无'}\n\n"
+                    f"启动时权限检测：{saved.get('permissions', {})}\n"
+                    f"启动窗口当前权限检测：{permission_status()}\n\n"
+                    "权限改动后请从本窗口退出软件再重新打开，关闭网页不能重启截图客户端。"
+                )
+            except (OSError, ValueError, KeyError, TypeError):
+                report = "尚无截图客户端诊断，请确认应用已启动。可在应用数据目录查看 desktop.log。"
+            messagebox.showinfo("截图诊断（可截图反馈）", report)
+
         ttk.Button(buttons, text="Mac 截图权限设置", command=permissions).grid(
-            row=2, column=0, columnspan=2, pady=5
+            row=2, column=0, padx=5, pady=5
+        )
+        ttk.Button(buttons, text="截图诊断", command=capture_diagnostics).grid(
+            row=2, column=1, padx=5, pady=5
         )
     tk.Label(
         root,

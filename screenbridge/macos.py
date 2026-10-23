@@ -5,6 +5,19 @@ import subprocess
 import sys
 
 
+def hotkey_listener(keyboard, hotkeys):
+    """Option/IME can change characters; keep default S/A shortcuts physical."""
+
+    class PhysicalHotKeys(keyboard.GlobalHotKeys):
+        def canonical(self, key):
+            vk = getattr(key, "vk", None)
+            if vk in {0x00, 0x01}:
+                return keyboard.KeyCode.from_char({0x00: "a", 0x01: "s"}[vk])
+            return super().canonical(key)
+
+    return PhysicalHotKeys(hotkeys)
+
+
 def permission_status():
     if sys.platform != "darwin":
         return {"screen_recording": None, "accessibility": None}
