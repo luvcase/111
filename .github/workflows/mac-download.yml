@@ -1,0 +1,78 @@
+name: Publish Mac Download
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/mac-download.yml']
+  workflow_run:
+    workflows: ['Build Mac App']
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: read
+jobs:
+  publish:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: mac-download-${{ github.event.workflow_run.id || '39917653551' }}
+      cancel-in-progress: false
+    env:
+      SOURCE_RUN: ${{ github.event.workflow_run.id || '39917653551' }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Verify source build
+        run: |
+          gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN" > source-run.json
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          run = json.loads(Path('source-run.json').read_text())
+          assert run['conclusion'] == 'success'
+          assert run['head_branch'] == 'main'
+          assert run['head_repository']['full_name'] == os.environ['GH_REPO']
+          assert run['path'] == '.github/workflows/mac-app.yml'
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              f.write('SOURCE_SHA=' + run['head_sha'] + '\n')
+          PY
+      - uses: actions/download-artifact@v4
+        with:
+          name: ScreenBridge-Mac-AppleSilicon
+          path: download
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ env.SOURCE_RUN }}
+      - name: Verify archive checksum
+        run: |
+          python - <<'PY'
+          import hashlib, zipfile
+          from pathlib import Path
+          root = Path('download')
+          archive = root / 'ScreenBridge-Mac-AppleSilicon.zip'
+          expected = (root / 'SHA256SUMS.txt').read_text().split()[0]
+          assert hashlib.sha256(archive.read_bytes()).hexdigest() == expected
+          with zipfile.ZipFile(archive) as z:
+              assert z.testzip() is None
+              assert any(n.endswith('ScreenBridge.app/Contents/MacOS/ScreenBridge') for n in z.namelist())
+          PY
+      - name: Publish public download
+        run: |
+          cat > notes.md <<'EOF'
+          Apple Silicon Mac test build. Download the ZIP below, extract ScreenBridge.app and move it to Applications. No Python installation is needed.
+
+          This build is not Developer ID signed or notarized. Screen recording and accessibility permissions must be granted on your Mac. The CI checks bundled Tk and the frozen service; real screen capture and hotkeys still require on-device verification.
+
+          See the attached Chinese guide for installation and permission steps. No user API keys or personal records are included.
+          EOF
+          tag="mac-build-$SOURCE_RUN"
+          if ! gh release view "$tag" > /dev/null 2>&1; then
+            gh release create "$tag" --target "$SOURCE_SHA" --prerelease \
+              --title 'ScreenBridge · Apple Silicon Mac 测试版' --notes-file notes.md \
+              download/ScreenBridge-Mac-AppleSilicon.zip download/使用说明.txt download/SHA256SUMS.txt
+          fi
+          gh release view "$tag" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"
