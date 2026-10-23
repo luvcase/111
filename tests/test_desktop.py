@@ -9,6 +9,10 @@ from screenbridge.desktop import capture, validate_server
 
 
 def test_screenshot_encodes_real_capture_buffer(monkeypatch):
+    monkeypatch.setattr(
+        "screenbridge.macos.permission_status",
+        lambda: {"screen_recording": True, "accessibility": True},
+    )
     class Screen:
         monitors = [{}, {"left": 0, "top": 0, "width": 100, "height": 60}]
 

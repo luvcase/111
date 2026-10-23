@@ -1,0 +1,80 @@
+name: Build Mac App
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 25
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: arm64
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.23'
+      - name: Verify architecture and install
+        run: |
+          test "$(uname -m)" = arm64
+          uv sync --frozen --extra desktop --extra dev --extra build
+          uv run --no-sync python -c 'import platform, tkinter; assert platform.machine() == "arm64"; print(tkinter.TkVersion)'
+      - name: Check source
+        run: |
+          uv run --no-sync ruff check .
+          uv run --no-sync pytest -q
+      - name: Package Apple Silicon app
+        run: uv run --no-sync pyinstaller --noconfirm --clean ScreenBridge-mac.spec
+      - name: Verify frozen service and bundled Tk
+        run: |
+          uv run --no-sync python scripts/verify_mac_package.py
+          codesign --verify --deep --strict dist/ScreenBridge.app
+      - name: Create distributable archive
+        run: |
+          cp docs/Mac应用使用说明.txt dist/使用说明.txt
+          ditto -c -k --sequesterRsrc --keepParent dist/ScreenBridge.app dist/ScreenBridge-Mac-AppleSilicon.zip
+          shasum -a 256 dist/ScreenBridge-Mac-AppleSilicon.zip > dist/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        id: application
+        with:
+          name: ScreenBridge-Mac-AppleSilicon
+          path: |
+            dist/ScreenBridge-Mac-AppleSilicon.zip
+            dist/使用说明.txt
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+      - name: Record build result
+        if: always()
+        env:
+          ARTIFACT_URL: ${{ steps.application.outputs.artifact-url }}
+          SOURCE_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          python - <<'PY'
+          import json, os, pathlib, subprocess
+          p = pathlib.Path('build/mac-smoke.json')
+          report = {'source': os.environ['SOURCE_SHA'], 'run': os.environ['RUN_ID'],
+                    'artifact_url': os.environ['ARTIFACT_URL'],
+                    'smoke': json.loads(p.read_text()) if p.exists() else {'ok': False}}
+          pathlib.Path('build').mkdir(exist_ok=True)
+          pathlib.Path('build/mac-build-report.json').write_text(json.dumps(report))
+          subprocess.run(['git', 'config', 'user.name', 'github-actions[bot]'], check=True)
+          subprocess.run(['git', 'config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com'], check=True)
+          tag = 'mac-build-report-' + os.environ['RUN_ID'] + '-' + os.environ['RUN_ATTEMPT']
+          subprocess.run(['git', 'tag', '-a', tag, '-F', 'build/mac-build-report.json'], check=True)
+          subprocess.run(['git', 'push', 'origin', 'refs/tags/' + tag], check=True)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: mac-build-diagnostics
+          path: build/*.json
+          if-no-files-found: ignore

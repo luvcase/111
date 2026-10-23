@@ -199,3 +199,5 @@ $("inspect-grids").addEventListener("click",async()=>{
   const button=$("inspect-grids");button.disabled=true;$("upload-status").textContent="正在本地读格，不调用 AI…";
   try{const image=await imageBlob();if(!image)return;const form=new FormData();form.append("image",image,"grid.png");const report=await api("/api/grids",{method:"POST",body:form});showGrids(report,report.inspection_image);$("upload-status").textContent="请对照检查图核验读格结果。";}catch(e){$("upload-status").textContent=e.message;}finally{button.disabled=!imageFile&&!imageJob;}
 });
+
+if(/Mac/.test(navigator.platform))$("capture-shortcuts").textContent="快捷键：Control + Option + A 选区 · Option + S 全屏";

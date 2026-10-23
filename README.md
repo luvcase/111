@@ -2,6 +2,12 @@
 
 Windows 截图与题目复盘工作台：题图直接交给视觉模型，电脑、网页和手机查看同一份复盘内容。
 
+## Apple 芯片 Mac 应用
+
+打开 [Mac 应用打包页面](https://github.com/luvcase/111/actions/workflows/mac-app.yml)，在成功记录下下载 **ScreenBridge-Mac-AppleSilicon**。解压内层 ZIP 得到 `.app`，移入“应用程序”后打开，不用安装 Python。首次截图需在启动窗口完成屏幕录制与辅助功能授权，并重启应用。默认快捷键是 Option+S 全屏、Control+Option+A 选区。
+
+这是尚未 Developer ID 签名和公证的个人测试构建。打包检查不代表真实截图、热键和权限已实机验证。详细步骤、数据位置和验证范围见 [Mac 使用说明](docs/Mac应用使用说明.txt)。
+
 ## 普通使用：Windows 应用版，不用安装 Python
 
 1. 打开 [Windows 应用打包页面](https://github.com/luvcase/111/actions/workflows/windows-app.yml)，点击最新的绿色成功记录。

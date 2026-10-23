@@ -1,5 +1,6 @@
 import queue
 import signal
+import sys
 import threading
 from urllib.parse import urlsplit
 
@@ -24,6 +25,13 @@ def enable_dpi_awareness():
 def capture_image(monitor=1):
     import mss
 
+    if sys.platform == "darwin":
+        from .macos import permission_status
+
+        if permission_status()["screen_recording"] is not True:
+            raise RuntimeError(
+                "无法确认屏幕录制权限，请在启动窗口打开 Mac 截图权限设置，授权后重启。"
+            )
     with mss.mss() as screen:
         if monitor < 1 or monitor >= len(screen.monitors):
             raise ValueError("显示器编号不存在，请从 1 开始选择")
@@ -48,6 +56,19 @@ def selection_box(start, end, width, height):
     return (x1, y1, x2, y2)
 
 
+def pixel_selection(box, logical_size, pixel_size):
+    """Map an overlay selection to the original capture, including Retina scaling."""
+    from math import ceil, floor
+
+    sx, sy = pixel_size[0] / logical_size[0], pixel_size[1] / logical_size[1]
+    return (
+        max(0, floor(box[0] * sx)),
+        max(0, floor(box[1] * sy)),
+        min(pixel_size[0], ceil(box[2] * sx)),
+        min(pixel_size[1], ceil(box[3] * sy)),
+    )
+
+
 def validate_server(server):
     url = urlsplit(server)
     if url.scheme not in {"http", "https"} or not url.hostname:
@@ -69,7 +90,14 @@ def run_desktop(
     import tkinter as tk
 
     from PIL import ImageTk
-    from pynput import keyboard, mouse
+
+    listen = True
+    if sys.platform == "darwin":
+        from .macos import permission_status
+
+        listen = permission_status()["accessibility"] is True
+    if listen:
+        from pynput import keyboard, mouse
 
     enable_dpi_awareness()
     server = validate_server(server)
@@ -154,20 +182,24 @@ def run_desktop(
             return
         try:
             frozen, bounds = capture_image(monitor)
+            logical_size = (bounds["width"], bounds["height"])
+            displayed = frozen.resize(logical_size, Image.Resampling.LANCZOS)
             window = tk.Toplevel(root)
             overlay["window"] = window
             window.overrideredirect(True)
             window.attributes("-topmost", True)
-            window.geometry(f"{frozen.width}x{frozen.height}{bounds['left']:+}{bounds['top']:+}")
+            window.geometry(
+                f"{logical_size[0]}x{logical_size[1]}{bounds['left']:+}{bounds['top']:+}"
+            )
             canvas = tk.Canvas(
                 window,
-                width=frozen.width,
-                height=frozen.height,
+                width=logical_size[0],
+                height=logical_size[1],
                 highlightthickness=0,
                 cursor="crosshair",
             )
             canvas.pack()
-            photo = ImageTk.PhotoImage(frozen)
+            photo = ImageTk.PhotoImage(displayed)
             canvas.create_image(0, 0, image=photo, anchor="nw")
             canvas.image = photo
             canvas.create_text(
@@ -176,7 +208,7 @@ def run_desktop(
                 anchor="nw",
                 fill="#21a878",
                 text="拖动选区，松开发送 · Esc 取消",
-                font=("Microsoft YaHei", 16),
+                font=("PingFang SC" if sys.platform == "darwin" else "Microsoft YaHei", 16),
             )
             selection = {"start": None, "rectangle": None, "closed": False}
 
@@ -203,16 +235,14 @@ def run_desktop(
             def finish(event):
                 if selection["closed"] or not selection["start"]:
                     return
-                box = selection_box(
-                    selection["start"], (event.x, event.y), frozen.width, frozen.height
-                )
+                box = selection_box(selection["start"], (event.x, event.y), *logical_size)
                 if not box:
                     cancel()
                     return
                 selection["closed"] = True
                 window.destroy()
                 overlay["window"] = None
-                jpeg = encode_image(frozen.crop(box))
+                jpeg = encode_image(frozen.crop(pixel_selection(box, logical_size, frozen.size)))
                 threading.Thread(target=upload, args=(jpeg,), daemon=True).start()
 
             canvas.bind("<ButtonPress-1>", begin)
@@ -225,7 +255,7 @@ def run_desktop(
             if right_start and mouse_state["pressed"]:
                 x = right_start[0] - bounds["left"]
                 y = right_start[1] - bounds["top"]
-                if 0 <= x < frozen.width and 0 <= y < frozen.height:
+                if 0 <= x < logical_size[0] and 0 <= y < logical_size[1]:
                     begin(type("Point", (), {"x": x, "y": y})())
         except Exception as exc:
             if overlay["window"]:
@@ -294,12 +324,19 @@ def run_desktop(
             pass
         root.after(80, pump)
 
-    key_listener = keyboard.GlobalHotKeys(
-        {hotkey: lambda: submit_command("full"), region_hotkey: lambda: submit_command("region")}
-    )
-    mouse_listener = mouse.Listener(on_click=on_click)
-    key_listener.start()
-    mouse_listener.start()
+    key_listener = mouse_listener = None
+    if listen:
+        key_listener = keyboard.GlobalHotKeys(
+            {
+                hotkey: lambda: submit_command("full"),
+                region_hotkey: lambda: submit_command("region"),
+            }
+        )
+        mouse_listener = mouse.Listener(on_click=on_click)
+        key_listener.start()
+        mouse_listener.start()
+    else:
+        print("未获得辅助功能权限：全局快捷键和右键监听未开启，授权后请重启软件。")
     threading.Thread(target=poll_server, daemon=True).start()
     print(f"全屏截图：{hotkey}；区域截图：{region_hotkey}；右键长按在工作台中开启。")
     signal.signal(signal.SIGINT, lambda *_: stopped.set())
@@ -308,6 +345,8 @@ def run_desktop(
         root.mainloop()
     finally:
         stopped.set()
-        key_listener.stop()
-        mouse_listener.stop()
+        if key_listener:
+            key_listener.stop()
+        if mouse_listener:
+            mouse_listener.stop()
         root.destroy()

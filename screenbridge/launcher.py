@@ -1,4 +1,4 @@
-"""Desktop application entry point; the frozen Windows bundle needs no system Python."""
+"""Desktop application entry point; the frozen desktop bundle needs no system Python."""
 
 import argparse
 import io
@@ -27,6 +27,8 @@ from .provider import Settings
 def data_directory():
     if sys.platform == "win32":
         base = Path(os.getenv("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
     else:
         base = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share"))
     directory = base / "ScreenBridge"
@@ -251,11 +253,12 @@ def package_smoke(result_path, native=None):
         import tkinter as tk
 
         native = sys.platform == "win32" if native is None else native
-        if native:
+        if native or sys.platform == "darwin":
             root = tk.Tk()
             root.withdraw()
             root.update()
             root.destroy()
+            result["tk_checked"] = True
         temporary = tempfile.TemporaryDirectory(prefix="screenbridge-package-")
         controller = RuntimeController(Path(temporary.name), demo=True, port=0)
         checkpoint("starting_runtime")
@@ -330,30 +333,31 @@ def show_app(directory):
     import tkinter as tk
     from tkinter import messagebox, ttk
 
+    ui_font = "PingFang SC" if sys.platform == "darwin" else "Microsoft YaHei"
     lock = AppLock(directory)
     if not lock.acquired:
         messagebox.showinfo("ScreenBridge", "软件已经运行，请打开已有的 ScreenBridge 窗口。")
         return 0
     root = tk.Tk()
     root.title("ScreenBridge")
-    root.geometry("540x400")
-    root.minsize(540, 400)
+    root.geometry("560x490" if sys.platform == "darwin" else "540x400")
+    root.minsize(540, 490 if sys.platform == "darwin" else 400)
     root.configure(background="#f3f7f5")
     style = ttk.Style(root)
     style.theme_use("clam")
-    style.configure("TButton", font=("Microsoft YaHei", 11), padding=(14, 9))
-    style.configure("TCheckbutton", background="#f3f7f5", font=("Microsoft YaHei", 10))
+    style.configure("TButton", font=(ui_font, 11), padding=(14, 9))
+    style.configure("TCheckbutton", background="#f3f7f5", font=(ui_font, 10))
     tk.Label(
         root,
         text="ScreenBridge",
-        font=("Segoe UI", 26, "bold"),
+        font=(ui_font, 26, "bold"),
         foreground="#246d51",
         background="#f3f7f5",
     ).pack(pady=(26, 2))
     tk.Label(
         root,
         text="题目复盘工作台 · 电脑与手机同步",
-        font=("Microsoft YaHei", 11),
+        font=(ui_font, 11),
         foreground="#6f8079",
         background="#f3f7f5",
     ).pack(pady=(0, 15))
@@ -361,7 +365,7 @@ def show_app(directory):
     tk.Label(
         root,
         textvariable=status,
-        font=("Microsoft YaHei", 10),
+        font=(ui_font, 10),
         foreground="#246d51",
         wraplength=480,
         background="#f3f7f5",
@@ -385,6 +389,8 @@ def show_app(directory):
         path = directory / "phone-qr.png"
         if path.exists() and sys.platform == "win32":
             os.startfile(path)
+        elif path.exists() and sys.platform == "darwin":
+            subprocess.Popen(["/usr/bin/open", str(path)])
         else:
             messagebox.showinfo("手机配对", f"配对二维码文件：{path}")
 
@@ -442,10 +448,34 @@ def show_app(directory):
     )
     ttk.Button(buttons, text="应用模式并重启", command=launch).grid(row=1, column=0, padx=5, pady=5)
     ttk.Button(buttons, text="退出软件", command=close).grid(row=1, column=1, padx=5, pady=5)
+    if sys.platform == "darwin":
+        from .macos import open_permission_settings, permission_status
+
+        def permissions():
+            try:
+                open_permission_settings()
+                messagebox.showinfo(
+                    "Mac 截图权限",
+                    "请在系统设置中为 ScreenBridge 开启屏幕录制权限；"
+                    "全局快捷键及鼠标监听还需辅助功能权限，系统若询问输入监控也请授权。"
+                    "完成后退出并重新打开软件。未授权时仍可导入本地题图。\n\n"
+                    f"当前检测结果：{permission_status()}",
+                )
+            except OSError:
+                messagebox.showerror("权限设置", "无法打开系统设置，请手动打开隐私与安全性。")
+
+        ttk.Button(buttons, text="Mac 截图权限设置", command=permissions).grid(
+            row=2, column=0, columnspan=2, pady=5
+        )
     tk.Label(
         root,
-        text="首次使用：在工作台填写模型 Key。\n手机与电脑连接同一 Wi-Fi，扫描配对二维码。",
-        font=("Microsoft YaHei", 9),
+        text="首次使用：在工作台填写模型 Key。\n手机与电脑连接同一 Wi-Fi，扫描配对二维码。"
+        + (
+            "\nMac：Option+S 全屏，Control+Option+A 选区。\n首次截图前请完成权限设置并重启软件。"
+            if sys.platform == "darwin"
+            else ""
+        ),
+        font=(ui_font, 9),
         foreground="#6f8079",
         background="#f3f7f5",
     ).pack(pady=8)
