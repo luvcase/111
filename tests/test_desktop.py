@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
-from screenbridge.desktop import capture, validate_server
+from screenbridge.desktop import capture, capture_action, validate_server
 
 
 def test_screenshot_encodes_real_capture_buffer(monkeypatch):
@@ -13,6 +13,7 @@ def test_screenshot_encodes_real_capture_buffer(monkeypatch):
         "screenbridge.macos.permission_status",
         lambda: {"screen_recording": True, "accessibility": True},
     )
+
     class Screen:
         monitors = [{}, {"left": 0, "top": 0, "width": 100, "height": 60}]
 
@@ -39,3 +40,9 @@ def test_desktop_server_validation():
     for bad in ["file:///etc/passwd", "https://user:secret@example.com", "http://a/#token=x"]:
         with pytest.raises(ValueError):
             validate_server(bad)
+
+
+@pytest.mark.parametrize("bad", ["全屏", "区域", "unknown", ""])
+def test_unknown_commands_never_fall_back_to_region(bad):
+    with pytest.raises(ValueError, match="未知截图指令"):
+        capture_action({"kind": bad}, lambda: None, lambda point: None)

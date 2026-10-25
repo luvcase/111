@@ -80,6 +80,28 @@ def validate_server(server):
     return server.rstrip("/")
 
 
+def shortcut_bindings(hotkey, region_hotkey, submit, report):
+    """Keep translated UI labels out of the command queue."""
+
+    def trigger(kind, label):
+        report(last_shortcut=label, shortcut_at=time.time())
+        submit(kind)
+
+    return {
+        hotkey: lambda: trigger("full", "全屏"),
+        region_hotkey: lambda: trigger("region", "区域"),
+    }
+
+
+def capture_action(command, full_capture, region_capture):
+    kind = command["kind"]
+    if kind == "full":
+        return full_capture
+    if kind == "region":
+        return lambda: region_capture(command.get("right_start"))
+    raise ValueError(f"未知截图指令：{str(kind)[:40]}")
+
+
 def run_desktop(
     server,
     token,
@@ -143,14 +165,17 @@ def run_desktop(
     busy = threading.Lock()
     preferences = {"right_hold": False}
     mouse_state = {"pressed": False, "serial": 0, "start": (0, 0)}
-    overlay = {"window": None}
+    overlay = {"window": None, "cancel": None}
 
     def submit_command(kind, **kwargs):
+        if kind not in {"full", "region", "cancel"}:
+            diagnose(last_error=f"未知截图指令：{str(kind)[:40]}")
+            return
         if not stopped.is_set():
             try:
                 commands.put_nowait({"kind": kind, **kwargs})
             except queue.Full:
-                pass
+                diagnose(last_error="截图请求队列已满，请稍后重试。")
 
     def upload(jpeg):
         try:
@@ -185,7 +210,10 @@ def run_desktop(
             busy.release()
 
     def full_capture():
+        if overlay["cancel"]:
+            overlay["cancel"]()
         if not busy.acquire(blocking=False):
+            diagnose(last_error="上一张截图仍在处理，本次全屏截图未执行，请稍后再按。")
             return
         diagnose(last_capture="正在全屏截图", last_error="")
 
@@ -205,8 +233,9 @@ def run_desktop(
         if right_start and not mouse_state["pressed"]:
             return
         if not busy.acquire(blocking=False):
+            diagnose(last_error="已有截图任务，请先完成或取消当前选区。")
             return
-        diagnose(last_capture="正在区域选框", last_error="")
+        diagnose(last_capture="正在准备区域截图", last_error="")
         try:
             frozen, bounds = capture_image(monitor)
             logical_size = (bounds["width"], bounds["height"])
@@ -237,15 +266,31 @@ def run_desktop(
                 text="拖动选区，松开发送 · Esc 取消",
                 font=("PingFang SC" if sys.platform == "darwin" else "Microsoft YaHei", 16),
             )
-            selection = {"start": None, "rectangle": None, "closed": False}
+            selection = {"start": None, "rectangle": None, "closed": False, "timeout": None}
 
-            def cancel(event=None):
+            def close_overlay():
                 if selection["closed"]:
-                    return
+                    return False
                 selection["closed"] = True
-                window.destroy()
+                if selection["timeout"]:
+                    try:
+                        root.after_cancel(selection["timeout"])
+                    except tk.TclError:
+                        pass
                 overlay["window"] = None
-                busy.release()
+                overlay["cancel"] = None
+                try:
+                    window.destroy()
+                except tk.TclError:
+                    pass
+                return True
+
+            def cancel(event=None, reason="区域选框已取消", error=""):
+                if close_overlay():
+                    busy.release()
+                    diagnose(last_capture=reason, last_error=error)
+
+            overlay["cancel"] = cancel
 
             def begin(event):
                 selection["start"] = (event.x, event.y)
@@ -266,11 +311,20 @@ def run_desktop(
                 if not box:
                     cancel()
                     return
-                selection["closed"] = True
-                window.destroy()
-                overlay["window"] = None
-                jpeg = encode_image(frozen.crop(pixel_selection(box, logical_size, frozen.size)))
-                threading.Thread(target=upload, args=(jpeg,), daemon=True).start()
+                try:
+                    jpeg = encode_image(
+                        frozen.crop(pixel_selection(box, logical_size, frozen.size))
+                    )
+                except Exception as exc:
+                    cancel(reason="区域截图失败", error=str(exc)[:500])
+                    return
+                if close_overlay():
+                    diagnose(last_capture="正在发送区域截图", last_error="")
+                    try:
+                        threading.Thread(target=upload, args=(jpeg,), daemon=True).start()
+                    except Exception as exc:
+                        busy.release()
+                        diagnose(last_capture="区域截图发送失败", last_error=str(exc)[:500])
 
             canvas.bind("<ButtonPress-1>", begin)
             canvas.bind("<B1-Motion>", move)
@@ -278,17 +332,26 @@ def run_desktop(
             canvas.bind("<B3-Motion>", move)
             canvas.bind("<ButtonRelease-3>", finish)
             window.bind("<Escape>", cancel)
+            window.protocol("WM_DELETE_WINDOW", cancel)
+            window.bind("<Destroy>", lambda event: cancel() if event.widget is window else None)
+            selection["timeout"] = root.after(
+                60000, lambda: cancel(reason="区域选框等待超过60秒，已取消")
+            )
             window.focus_force()
+            diagnose(last_capture="正在区域选框", last_error="")
             if right_start and mouse_state["pressed"]:
                 x = right_start[0] - bounds["left"]
                 y = right_start[1] - bounds["top"]
                 if 0 <= x < logical_size[0] and 0 <= y < logical_size[1]:
                     begin(type("Point", (), {"x": x, "y": y})())
         except Exception as exc:
-            if overlay["window"]:
-                overlay["window"].destroy()
-                overlay["window"] = None
-            busy.release()
+            if overlay["cancel"]:
+                overlay["cancel"](reason="区域截图失败", error=str(exc)[:500])
+            else:
+                if overlay["window"]:
+                    overlay["window"].destroy()
+                    overlay["window"] = None
+                busy.release()
             print("区域截图失败：" + str(exc))
             diagnose(last_capture="区域截图失败", last_error=str(exc)[:500])
 
@@ -353,23 +416,24 @@ def run_desktop(
         try:
             while True:
                 command = commands.get_nowait()
-                action = (
-                    full_capture
-                    if command["kind"] == "full"
-                    else lambda cmd=command: region_capture(cmd.get("right_start"))
-                )
+                if command["kind"] == "cancel":
+                    if overlay["cancel"]:
+                        overlay["cancel"]()
+                    continue
+                try:
+                    action = capture_action(command, full_capture, region_capture)
+                except ValueError as exc:
+                    diagnose(last_error=str(exc))
+                    continue
                 root.after(round(command.get("delay", 0) * 1000), action)
         except queue.Empty:
             pass
         root.after(80, pump)
 
-    def shortcut(kind):
-        diagnose(last_shortcut=kind, shortcut_at=time.time())
-        submit_command(kind)
-
     key_listener = mouse_listener = None
     if listen:
-        hotkeys = {hotkey: lambda: shortcut("全屏"), region_hotkey: lambda: shortcut("区域")}
+        hotkeys = shortcut_bindings(hotkey, region_hotkey, submit_command, diagnose)
+        hotkeys["<esc>"] = lambda: submit_command("cancel")
         if sys.platform == "darwin":
             from .macos import hotkey_listener
 

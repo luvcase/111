@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from screenbridge import macos
-from screenbridge.desktop import capture_image, pixel_selection
+from screenbridge.desktop import capture_action, capture_image, pixel_selection, shortcut_bindings
 from screenbridge.launcher import data_directory
 
 
@@ -29,9 +29,14 @@ def test_option_characters_use_physical_shortcut_keys(vk, char, expected):
 def test_darwin_hotkey_engine_matches_option_translated_events(region, right_option):
     from pynput import keyboard
 
-    triggered = []
-    combo = "<ctrl>+<alt>+a" if region else "<alt>+s"
-    listener = macos.hotkey_listener(keyboard, {combo: lambda: triggered.append(True)})
+    commands, reports = [], []
+    bindings = shortcut_bindings(
+        "<alt>+s",
+        "<ctrl>+<alt>+a",
+        lambda kind: commands.append({"kind": kind}),
+        lambda **data: reports.append(data),
+    )
+    listener = macos.hotkey_listener(keyboard, bindings)
     modifiers = [keyboard.Key.ctrl_l] if region else []
     modifiers += [keyboard.Key.alt_r if right_option else keyboard.Key.alt_l]
     key = keyboard.KeyCode.from_char("å" if region else "ß", vk=0 if region else 1)
@@ -39,14 +44,20 @@ def test_darwin_hotkey_engine_matches_option_translated_events(region, right_opt
         listener._on_press(modifier, False)
     listener._on_press(key, False)
     listener._on_press(key, False)  # key auto-repeat must not submit a second capture
-    assert triggered == [True]
+    expected = "region" if region else "full"
+    assert commands == [{"kind": expected}]
+    actions = []
+    capture_action(
+        commands[0], lambda: actions.append("full"), lambda point: actions.append("region")
+    )()
+    assert actions == [expected]
     listener._on_release(key, False)
     for modifier in reversed(modifiers):
         listener._on_release(modifier, False)
     for modifier in modifiers:
         listener._on_press(modifier, False)
     listener._on_press(key, False)
-    assert triggered == [True, True]
+    assert commands == [{"kind": expected}, {"kind": expected}]
 
 
 @pytest.mark.parametrize(
