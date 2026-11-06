@@ -32,7 +32,10 @@ def test_runtime_starts_authenticated_workbench_and_shuts_down(tmp_path):
             headers = {"Authorization": "Bearer " + runtime.token}
             assert client.get(runtime.base_url + "/api/status", headers=headers).json()["demo"]
         assert (tmp_path / "phone-qr.png").exists()
-        assert json.loads((tmp_path / "instance.json").read_text())["port"] == runtime.port
+        assert (
+            json.loads((tmp_path / "instance.json").read_text(encoding="utf-8"))["port"]
+            == runtime.port
+        )
     finally:
         runtime.stop()
     assert not (tmp_path / "instance.json").exists()
@@ -71,7 +74,7 @@ def test_source_package_smoke(tmp_path):
     # CI runs the actual frozen native Windows smoke separately.
     result_file = tmp_path / "smoke.json"
     assert package_smoke(result_file, native=False) == 0
-    result = json.loads(result_file.read_text())
+    result = json.loads(result_file.read_text(encoding="utf-8"))
     assert result["ok"] and not result["native_checked"]
 
 
@@ -85,7 +88,7 @@ def test_package_smoke_cleans_up_failed_start(monkeypatch, tmp_path):
     monkeypatch.setattr(RuntimeController, "start", fail_start)
     result_file = tmp_path / "failed-smoke.json"
     assert package_smoke(result_file, native=False) == 1
-    result = json.loads(result_file.read_text())
+    result = json.loads(result_file.read_text(encoding="utf-8"))
     assert result["error"] == "startup-check-failed" and not result["ok"]
 
 

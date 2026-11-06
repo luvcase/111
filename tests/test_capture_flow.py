@@ -181,7 +181,7 @@ def test_native_shortcut_to_capture_and_upload(monkeypatch, tmp_path, scenario):
                 while time.monotonic() < deadline:
                     while self.callbacks and self.callbacks[0][0] <= time.monotonic():
                         heapq.heappop(self.callbacks)[3]()
-                    status = json.loads(status_path.read_text())
+                    status = json.loads(status_path.read_text(encoding="utf-8"))
                     if scenario.startswith("panel_"):
                         panel = panels[0]
                         if self.phase == 0 and panel.wanted and not panel.suspended:
@@ -230,7 +230,7 @@ def test_native_shortcut_to_capture_and_upload(monkeypatch, tmp_path, scenario):
                         "timeout_then_full",
                         "encode_failure_then_full",
                     }:
-                        status = json.loads(status_path.read_text())
+                        status = json.loads(status_path.read_text(encoding="utf-8"))
                         if status["last_capture"] in {
                             "区域选框已取消",
                             "区域选框等待超过60秒，已取消",
@@ -275,7 +275,7 @@ def test_native_shortcut_to_capture_and_upload(monkeypatch, tmp_path, scenario):
             assert root.window is None, "Full-screen shortcut must never open a region selector"
         else:
             assert root.window.destroyed
-        status = json.loads(status_path.read_text())
+        status = json.loads(status_path.read_text(encoding="utf-8"))
         assert status["last_capture"] == "截图已发送"
         assert not status["last_error"]
         if scenario.startswith("panel_"):

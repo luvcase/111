@@ -22,7 +22,7 @@ jobs:
       - name: Check source
         run: |
           uv run --no-sync ruff check .
-          uv run --no-sync pytest -q
+          uv run --no-sync pytest -q --junitxml=build/test-results.xml
       - name: Package executable
         run: uv run --no-sync pyinstaller --noconfirm --clean ScreenBridge.spec
       - name: Verify packaged application
@@ -103,6 +103,16 @@ jobs:
             run = '${{ github.run_id }}'
             artifact_url = '${{ steps.application.outputs.artifact-url }}'
             smoke = $smoke
+          }
+          if (Test-Path 'build/test-results.xml') {
+            [xml]$tests = Get-Content 'build/test-results.xml' -Raw -Encoding utf8
+            $failures = @()
+            foreach ($test in $tests.testsuites.testsuite.testcase) {
+              if ($test.failure -or $test.error) {
+                $failures += @{ name = $test.name; failure = "$($test.failure.InnerText)$($test.error.InnerText)" }
+              }
+            }
+            $report.tests = @{ failures = $failures }
           }
           $report | ConvertTo-Json -Depth 8 | Set-Content 'build/app-build-report.json' -Encoding utf8
           git config user.name 'github-actions[bot]'
