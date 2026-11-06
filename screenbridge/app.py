@@ -686,6 +686,17 @@ def create_app(settings=None, token=None, provider=None, data_dir: Path | None =
             store.revoke(authorization.removeprefix("Bearer "))
         return {"ok": True}
 
+    @app.post("/api/desktop/panel")
+    async def panel_command(authorization: str | None = Header(default=None)):
+        owner = authorize(authorization)
+        agent = native.get(owner, {})
+        if time.time() - agent.get("seen", 0) > 10:
+            raise HTTPException(503, "请先启动电脑截图客户端，并登录相同账号或设备空间")
+        if len(agent["commands"]) >= 2:
+            raise HTTPException(429, "已有待执行截图指令，请稍后再试")
+        agent["commands"].append({"kind": "panel"})
+        return {"ok": True}
+
     @app.post("/api/desktop/capture")
     async def capture_command(request: Request, authorization: str | None = Header(default=None)):
         owner = authorize(authorization)

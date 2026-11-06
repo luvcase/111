@@ -28,19 +28,37 @@ from screenbridge.launcher import RuntimeController
         "timeout_then_full",
         "selection",
         "encode_failure_then_full",
+        "panel_full",
+        "panel_selection",
+        "panel_capture_failure_then_full",
+        "panel_escape_then_full",
     ],
 )
 def test_native_shortcut_to_capture_and_upload(monkeypatch, tmp_path, scenario):
     runtime = RuntimeController(tmp_path / "server", demo=True, port=0)
     runtime.start(native=False)
     keyboard_state = {}
+    panels = []
+    panel_class = desktop.CapturePanel
+
+    def make_panel(*args):
+        panel = panel_class(*args)
+        panels.append(panel)
+        return panel
+
+    monkeypatch.setattr(desktop, "CapturePanel", make_panel)
     status_path = tmp_path / "desktop-status.json"
     source = Image.new("RGB", (100, 80), "#21a878")
-    monkeypatch.setattr(
-        desktop,
-        "capture_image",
-        lambda monitor: (source.copy(), {"left": 0, "top": 0, "width": 100, "height": 80}),
-    )
+    capture_calls = []
+
+    def capture_image(monitor):
+        assert panels[0].suspended, "Keypad must be withdrawn before reading the screen"
+        capture_calls.append(True)
+        if scenario == "panel_capture_failure_then_full" and len(capture_calls) == 1:
+            raise RuntimeError("test-screen-failure")
+        return source.copy(), {"left": 0, "top": 0, "width": 100, "height": 80}
+
+    monkeypatch.setattr(desktop, "capture_image", capture_image)
     monkeypatch.setattr(
         "screenbridge.macos.permission_status",
         lambda: {"screen_recording": True, "accessibility": True},
@@ -65,7 +83,8 @@ def test_native_shortcut_to_capture_and_upload(monkeypatch, tmp_path, scenario):
             self.alive = False
 
         def start(self):
-            self.alive = True
+            # Mouse-operated capture must also work if the keyboard listener stops.
+            self.alive = not scenario.startswith("panel_")
 
         def stop(self):
             self.alive = False
@@ -87,12 +106,25 @@ def test_native_shortcut_to_capture_and_upload(monkeypatch, tmp_path, scenario):
         def __init__(self, parent=None, **kwargs):
             self.bindings = {}
             self.destroyed = False
+            self.command = kwargs.get("command")
+            self.visible = False
             if parent is not None:
                 self.root = parent if isinstance(parent, Root) else parent.root
-                if isinstance(parent, Root):
-                    self.root.window = self
-                else:
-                    self.root.canvas = self
+
+        def overrideredirect(self, value):
+            self.root.window = self
+
+        def create_image(self, *args, **kwargs):
+            self.root.canvas = self
+
+        def invoke(self):
+            self.command()
+
+        def withdraw(self):
+            self.visible = False
+
+        def deiconify(self):
+            self.visible = True
 
         def bind(self, name, callback):
             self.bindings[name] = callback
@@ -131,13 +163,50 @@ def test_native_shortcut_to_capture_and_upload(monkeypatch, tmp_path, scenario):
             heapq.heapify(self.callbacks)
 
         def mainloop(self):
-            keyboard_state["<alt>+s" if scenario == "full" else "<ctrl>+<alt>+a"]()
+            if scenario.startswith("panel_"):
+                with httpx.Client(timeout=2, trust_env=False) as client:
+                    deadline = time.monotonic() + 3
+                    while time.monotonic() < deadline:
+                        if client.get(
+                            runtime.base_url + "/api/status",
+                            headers={"Authorization": "Bearer " + runtime.token},
+                        ).json()["desktop_connected"]:
+                            break
+                        time.sleep(0.01)
+                runtime.open_capture_panel()
+            else:
+                keyboard_state["<alt>+s" if scenario == "full" else "<ctrl>+<alt>+a"]()
             deadline = time.monotonic() + 8
             with httpx.Client(timeout=2, trust_env=False) as client:
                 while time.monotonic() < deadline:
                     while self.callbacks and self.callbacks[0][0] <= time.monotonic():
                         heapq.heappop(self.callbacks)[3]()
                     status = json.loads(status_path.read_text())
+                    if scenario.startswith("panel_"):
+                        panel = panels[0]
+                        if self.phase == 0 and panel.wanted and not panel.suspended:
+                            self.phase = 1
+                            panel.buttons[
+                                "region"
+                                if scenario in {"panel_selection", "panel_escape_then_full"}
+                                else "full"
+                            ].invoke()
+                        elif self.phase == 1 and status["last_capture"] == "正在区域选框":
+                            self.phase = 2
+                            if scenario == "panel_escape_then_full":
+                                self.window.bindings["<Escape>"]()
+                            else:
+                                self.canvas.bindings["<ButtonPress-1>"](SimpleNamespace(x=10, y=10))
+                                self.canvas.bindings["<ButtonRelease-1>"](
+                                    SimpleNamespace(x=50, y=40)
+                                )
+                        elif (
+                            self.phase in {1, 2}
+                            and status["last_capture"] in {"截图失败", "区域选框已取消"}
+                            and not panel.suspended
+                        ):
+                            self.phase = 3
+                            panel.buttons["full"].invoke()
                     if (
                         self.phase == 0
                         and scenario != "full"
@@ -174,6 +243,8 @@ def test_native_shortcut_to_capture_and_upload(monkeypatch, tmp_path, scenario):
                         headers={"Authorization": "Bearer " + runtime.token},
                     ).json()["jobs"]
                     if jobs and jobs[-1]["status"] == "done":
+                        if panels[0].suspended:
+                            continue
                         self.result = jobs[-1]
                         return
                     time.sleep(0.01)
@@ -183,21 +254,32 @@ def test_native_shortcut_to_capture_and_upload(monkeypatch, tmp_path, scenario):
     monkeypatch.setitem(
         sys.modules,
         "tkinter",
-        SimpleNamespace(Tk=lambda: root, Toplevel=Widget, Canvas=Widget, TclError=RuntimeError),
+        SimpleNamespace(
+            Tk=lambda: root,
+            Toplevel=Widget,
+            Canvas=Widget,
+            Label=Widget,
+            Frame=Widget,
+            Button=Widget,
+            TclError=RuntimeError,
+        ),
     )
     try:
         desktop.run_desktop(
             runtime.base_url, runtime.token, session_file=tmp_path / "desktop-session.txt"
         )
         assert root.result is not None
-        expected = (40, 30) if scenario == "selection" else (100, 80)
+        expected = (40, 30) if scenario in {"selection", "panel_selection"} else (100, 80)
         assert (root.result["image_info"]["width"], root.result["image_info"]["height"]) == expected
-        if scenario == "full":
+        if scenario in {"full", "panel_full", "panel_capture_failure_then_full"}:
             assert root.window is None, "Full-screen shortcut must never open a region selector"
         else:
             assert root.window.destroyed
         status = json.loads(status_path.read_text())
         assert status["last_capture"] == "截图已发送"
         assert not status["last_error"]
+        if scenario.startswith("panel_"):
+            assert panels[0].window.visible
+            assert status["last_input"].startswith("虚拟按键")
     finally:
         runtime.stop()

@@ -1,0 +1,75 @@
+name: Publish Windows Download
+on:
+  workflow_run:
+    workflows: ['Build Windows App']
+    types: [completed]
+    branches: [main]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  publish:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: windows-download-${{ github.event.workflow_run.id }}
+      cancel-in-progress: false
+    env:
+      SOURCE_RUN: ${{ github.event.workflow_run.id }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Verify source build
+        run: |
+          gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN" > source-run.json
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          run = json.loads(Path('source-run.json').read_text())
+          assert run['conclusion'] == 'success'
+          assert run['head_branch'] == 'main'
+          assert run['head_repository']['full_name'] == os.environ['GH_REPO']
+          assert run['path'] == '.github/workflows/windows-app.yml'
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              f.write('SOURCE_SHA=' + run['head_sha'] + '\n')
+          PY
+      - uses: actions/download-artifact@v4
+        with:
+          name: ScreenBridge-Windows-download
+          path: download
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ env.SOURCE_RUN }}
+      - name: Verify archive checksum
+        run: |
+          python - <<'PY'
+          import hashlib, zipfile
+          from pathlib import Path
+          root = Path('download')
+          archive = root / 'ScreenBridge-Windows-x64.zip'
+          expected = (root / 'SHA256SUMS.txt').read_text().split()[0]
+          assert hashlib.sha256(archive.read_bytes()).hexdigest() == expected
+          with zipfile.ZipFile(archive) as z:
+              assert z.testzip() is None
+              names = {name.replace('\\', '/') for name in z.namelist()}
+              assert 'ScreenBridge/ScreenBridge.exe' in names
+              assert any(n.startswith('ScreenBridge/_internal/') for n in names)
+          PY
+      - name: Publish public download
+        run: |
+          cat > notes.md <<'EOF'
+          Windows 64-bit portable app. Download ScreenBridge-Windows-x64.zip and extract the entire ScreenBridge folder. Double-click ScreenBridge.exe; keep the _internal folder next to it. No Python installation is needed.
+
+          Includes a mouse-operated capture keypad (截图虚拟按键) and capture diagnostics in the launcher. The keypad calls capture directly without injecting system keyboard events. It does not block input monitoring by other programs.
+
+          CI checks source tests, real Tk controls, the frozen app and native screenshot upload in demo mode. Actual AI accuracy is not verified. This build is unsigned. No user API keys or personal records are included.
+          EOF
+          tag="windows-build-$SOURCE_RUN"
+          if ! gh release view "$tag" > /dev/null 2>&1; then
+            gh release create "$tag" --target "$SOURCE_SHA" --prerelease \
+              --title 'ScreenBridge 0.9.0 · Windows 64 位测试版' --notes-file notes.md \
+              download/ScreenBridge-Windows-x64.zip download/使用说明.txt download/SHA256SUMS.txt
+          fi
+          gh release view "$tag" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"

@@ -42,6 +42,21 @@ jobs:
       - name: Add user guide
         shell: pwsh
         run: Copy-Item 'docs/Windows应用使用说明.txt' 'dist/ScreenBridge/使用说明.txt'
+      - name: Create public download archive
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path download | Out-Null
+          Compress-Archive -Path 'dist/ScreenBridge' -DestinationPath 'download/ScreenBridge-Windows-x64.zip'
+          $hash = (Get-FileHash 'download/ScreenBridge-Windows-x64.zip' -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  ScreenBridge-Windows-x64.zip" | Set-Content 'download/SHA256SUMS.txt' -Encoding ascii
+          Copy-Item 'docs/Windows应用使用说明.txt' 'download/使用说明.txt'
+      - name: Upload public download archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScreenBridge-Windows-download
+          path: download/
+          if-no-files-found: error
+          retention-days: 30
       - name: Upload Windows application
         id: application
         uses: actions/upload-artifact@v4

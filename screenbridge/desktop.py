@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 import httpx
 from PIL import Image
 
+from .capture_panel import CapturePanel
 from .images import encode_question_image, image_mime
 
 
@@ -161,6 +162,7 @@ def run_desktop(
     root = tk.Tk()
     root.withdraw()
     commands = queue.Queue(maxsize=8)
+    ui_events = queue.SimpleQueue()
     stopped = threading.Event()
     busy = threading.Lock()
     preferences = {"right_hold": False}
@@ -168,7 +170,7 @@ def run_desktop(
     overlay = {"window": None, "cancel": None}
 
     def submit_command(kind, **kwargs):
-        if kind not in {"full", "region", "cancel"}:
+        if kind not in {"full", "region", "cancel", "panel"}:
             diagnose(last_error=f"未知截图指令：{str(kind)[:40]}")
             return
         if not stopped.is_set():
@@ -176,6 +178,8 @@ def run_desktop(
                 commands.put_nowait({"kind": kind, **kwargs})
             except queue.Full:
                 diagnose(last_error="截图请求队列已满，请稍后重试。")
+
+    panel = CapturePanel(root, submit_command)
 
     def upload(jpeg):
         try:
@@ -216,6 +220,7 @@ def run_desktop(
             diagnose(last_error="上一张截图仍在处理，本次全屏截图未执行，请稍后再按。")
             return
         diagnose(last_capture="正在全屏截图", last_error="")
+        panel.suspend()
 
         def worker():
             try:
@@ -225,9 +230,20 @@ def run_desktop(
                 diagnose(last_capture="截图失败", last_error=str(exc)[:500])
                 busy.release()
                 return
+            finally:
+                ui_events.put(panel.resume)
             upload(jpeg)
 
-        threading.Thread(target=worker, daemon=True).start()
+        def start_worker():
+            try:
+                threading.Thread(target=worker, daemon=True).start()
+            except Exception as exc:
+                busy.release()
+                panel.resume()
+                diagnose(last_capture="截图失败", last_error=str(exc)[:500])
+
+        # Give the window compositor time to remove the keypad from the screen.
+        root.after(200, start_worker)
 
     def region_capture(right_start=None):
         if right_start and not mouse_state["pressed"]:
@@ -236,6 +252,10 @@ def run_desktop(
             diagnose(last_error="已有截图任务，请先完成或取消当前选区。")
             return
         diagnose(last_capture="正在准备区域截图", last_error="")
+        panel.suspend()
+        root.after(200, lambda: open_region(right_start))
+
+    def open_region(right_start=None):
         try:
             frozen, bounds = capture_image(monitor)
             logical_size = (bounds["width"], bounds["height"])
@@ -283,6 +303,7 @@ def run_desktop(
                     window.destroy()
                 except tk.TclError:
                     pass
+                panel.resume()
                 return True
 
             def cancel(event=None, reason="区域选框已取消", error=""):
@@ -352,6 +373,7 @@ def run_desktop(
                     overlay["window"].destroy()
                     overlay["window"] = None
                 busy.release()
+                panel.resume()
             print("区域截图失败：" + str(exc))
             diagnose(last_capture="区域截图失败", last_error=str(exc)[:500])
 
@@ -414,12 +436,19 @@ def run_desktop(
                     else "监听线程已停止；请检查辅助功能、输入监控权限并退出重开软件"
                 )
         try:
+            while not ui_events.empty():
+                ui_events.get_nowait()()
             while True:
                 command = commands.get_nowait()
+                if command["kind"] == "panel":
+                    panel.show()
+                    continue
                 if command["kind"] == "cancel":
                     if overlay["cancel"]:
                         overlay["cancel"]()
                     continue
+                if command.get("source") == "panel":
+                    diagnose(last_input="虚拟按键：" + command["kind"])
                 try:
                     action = capture_action(command, full_capture, region_capture)
                 except ValueError as exc:
@@ -428,6 +457,8 @@ def run_desktop(
                 root.after(round(command.get("delay", 0) * 1000), action)
         except queue.Empty:
             pass
+        with diagnostic_lock:
+            panel.update_status(diagnostics)
         root.after(80, pump)
 
     key_listener = mouse_listener = None

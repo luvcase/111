@@ -237,6 +237,15 @@ class RuntimeController:
         instance = self.directory / "instance.json"
         instance.unlink(missing_ok=True)
 
+    def open_capture_panel(self):
+        with httpx.Client(timeout=3, trust_env=False) as client:
+            response = client.post(
+                self.base_url + "/api/desktop/panel",
+                headers={"Authorization": "Bearer " + self.active_token()},
+            )
+        if response.status_code != 200:
+            raise RuntimeError(response.json().get("detail", "无法打开截图虚拟按键"))
+
 
 def package_smoke(result_path, native=None):
     result = {"ok": False, "native_checked": False}
@@ -339,9 +348,9 @@ def show_app(directory):
         messagebox.showinfo("ScreenBridge", "软件已经运行，请打开已有的 ScreenBridge 窗口。")
         return 0
     root = tk.Tk()
-    root.title("ScreenBridge 0.8.2")
-    root.geometry("560x490" if sys.platform == "darwin" else "540x400")
-    root.minsize(540, 490 if sys.platform == "darwin" else 400)
+    root.title("ScreenBridge 0.9.0")
+    root.geometry("560x550" if sys.platform == "darwin" else "540x490")
+    root.minsize(540, 550 if sys.platform == "darwin" else 490)
     root.configure(background="#f3f7f5")
     style = ttk.Style(root)
     style.theme_use("clam")
@@ -393,6 +402,44 @@ def show_app(directory):
             subprocess.Popen(["/usr/bin/open", str(path)])
         else:
             messagebox.showinfo("手机配对", f"配对二维码文件：{path}")
+
+    def open_capture_panel():
+        runtime = controller["value"]
+        if not runtime or controller["busy"]:
+            status.set("请等待截图客户端启动后再打开虚拟按键。")
+            return
+
+        def worker():
+            try:
+                runtime.open_capture_panel()
+            except Exception as exc:
+                notify(str(exc))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def capture_diagnostics():
+        try:
+            saved = json.loads((directory / "desktop-status.json").read_text(encoding="utf-8"))
+            updated = time.strftime("%m-%d %H:%M:%S", time.localtime(saved["updated_at"]))
+            report = (
+                f"应用版本：0.9.0\n截图客户端最后更新：{updated}\n"
+                f"快捷键监听：{saved.get('hotkeys', '未知')}\n"
+                f"最后收到的快捷键：{saved.get('last_shortcut', '尚未收到')}\n"
+                f"最近的虚拟按键：{saved.get('last_input', '尚未收到')}\n"
+                f"截图状态：{saved.get('last_capture', '未知')}\n"
+                f"错误：{saved.get('last_error') or '无'}"
+            )
+            if sys.platform == "darwin":
+                from .macos import permission_status
+
+                report += (
+                    f"\n\n启动时权限检测：{saved.get('permissions', {})}\n"
+                    f"启动窗口当前权限检测：{permission_status()}\n\n"
+                    "权限改动后请从本窗口退出软件再重新打开，关闭网页不能重启截图客户端。"
+                )
+        except (OSError, ValueError, KeyError, TypeError):
+            report = "尚无截图客户端诊断，请确认应用已启动。可在应用数据目录查看 desktop.log。"
+        messagebox.showinfo("截图诊断（可截图反馈）", report)
 
     def launch():
         if controller["busy"]:
@@ -448,6 +495,12 @@ def show_app(directory):
     )
     ttk.Button(buttons, text="应用模式并重启", command=launch).grid(row=1, column=0, padx=5, pady=5)
     ttk.Button(buttons, text="退出软件", command=close).grid(row=1, column=1, padx=5, pady=5)
+    ttk.Button(buttons, text="截图虚拟按键", command=open_capture_panel).grid(
+        row=2, column=0, padx=5, pady=5
+    )
+    ttk.Button(buttons, text="截图诊断", command=capture_diagnostics).grid(
+        row=2, column=1, padx=5, pady=5
+    )
     if sys.platform == "darwin":
         from .macos import open_permission_settings, permission_status
 
@@ -464,29 +517,8 @@ def show_app(directory):
             except OSError:
                 messagebox.showerror("权限设置", "无法打开系统设置，请手动打开隐私与安全性。")
 
-        def capture_diagnostics():
-            try:
-                saved = json.loads((directory / "desktop-status.json").read_text(encoding="utf-8"))
-                updated = time.strftime("%m-%d %H:%M:%S", time.localtime(saved["updated_at"]))
-                report = (
-                    f"应用版本：0.8.2\n截图客户端最后更新：{updated}\n"
-                    f"快捷键监听：{saved.get('hotkeys', '未知')}\n"
-                    f"最后收到的快捷键：{saved.get('last_shortcut', '尚未收到')}\n"
-                    f"截图状态：{saved.get('last_capture', '未知')}\n"
-                    f"错误：{saved.get('last_error') or '无'}\n\n"
-                    f"启动时权限检测：{saved.get('permissions', {})}\n"
-                    f"启动窗口当前权限检测：{permission_status()}\n\n"
-                    "权限改动后请从本窗口退出软件再重新打开，关闭网页不能重启截图客户端。"
-                )
-            except (OSError, ValueError, KeyError, TypeError):
-                report = "尚无截图客户端诊断，请确认应用已启动。可在应用数据目录查看 desktop.log。"
-            messagebox.showinfo("截图诊断（可截图反馈）", report)
-
         ttk.Button(buttons, text="Mac 截图权限设置", command=permissions).grid(
-            row=2, column=0, padx=5, pady=5
-        )
-        ttk.Button(buttons, text="截图诊断", command=capture_diagnostics).grid(
-            row=2, column=1, padx=5, pady=5
+            row=3, column=0, columnspan=2, padx=5, pady=5
         )
     tk.Label(
         root,
@@ -494,7 +526,7 @@ def show_app(directory):
         + (
             "\nMac：Option+S 全屏，Control+Option+A 选区。\n首次截图前请完成权限设置并重启软件。"
             if sys.platform == "darwin"
-            else ""
+            else "\nAlt+S 全屏，Ctrl+Alt+A 选区；也可使用截图虚拟按键。"
         ),
         font=(ui_font, 9),
         foreground="#6f8079",

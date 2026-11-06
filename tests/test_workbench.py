@@ -244,6 +244,23 @@ def test_desktop_commands_and_account_binding():
         )
 
 
+def test_capture_panel_commands_require_auth_live_client_and_correct_owner():
+    with TestClient(create_app(Settings(demo=True), TOKEN)) as client:
+        assert client.post("/api/desktop/panel").status_code == 401
+        assert client.post("/api/desktop/panel", headers=HEADERS).status_code == 503
+        client.get("/api/desktop/poll", headers=HEADERS)
+        alice = register(client, "alice")
+        assert client.post("/api/desktop/panel", headers=alice).status_code == 503
+        for _ in range(2):
+            assert client.post("/api/desktop/panel", headers=HEADERS).status_code == 200
+        assert client.post("/api/desktop/panel", headers=HEADERS).status_code == 429
+        assert client.get("/api/desktop/poll", headers=alice).json()["commands"] == []
+        assert client.get("/api/desktop/poll", headers=HEADERS).json()["commands"] == [
+            {"kind": "panel"},
+            {"kind": "panel"},
+        ]
+
+
 def test_region_selection_clamps_and_rejects_clicks():
     assert selection_box((80, 70), (-10, 20), 100, 60) == (0, 20, 80, 60)
     assert selection_box((5, 5), (7, 7), 100, 100) is None

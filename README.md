@@ -10,7 +10,7 @@ Windows 截图与题目复盘工作台：题图直接交给视觉模型，电脑
 
 ## 普通使用：Windows 应用版，不用安装 Python
 
-1. 打开 [Windows 应用打包页面](https://github.com/luvcase/111/actions/workflows/windows-app.yml)，点击最新的绿色成功记录。
+1. 优先在 [公开下载页](https://github.com/luvcase/111/releases) 选择 Windows 版，下载 `ScreenBridge-Windows-x64.zip`，解压 `ScreenBridge` 文件夹后打开其中的 `ScreenBridge.exe`。开发者也可打开 [Windows 应用打包页面](https://github.com/luvcase/111/actions/workflows/windows-app.yml)，点击最新的绿色成功记录。
 2. 在页面下方 **Artifacts** 下载 **ScreenBridge-Windows-app**。这才是应用包；仓库 **Code → Download ZIP** 下载的是源码。
 3. 解压所有文件，双击 **ScreenBridge.exe**。保留旁边的 `_internal` 文件夹，软件会自动启动并打开工作台。
 4. 在“模型与提示词”点击 **更换模型 · Astra / Sol**，选择模型预设、填写自己的 OpenAI Key，点击 **保存并应用** 后测试连接。已有配置的 Key 可以留空保留。
@@ -26,6 +26,7 @@ Windows 截图与题目复盘工作台：题图直接交给视觉模型，电脑
 
 答案现在优先展示；题意、解析与模型信息默认收起，手机收到新结果后自动定位到结果区域。OCR 任务仍直接显示转录文字。全屏快捷键为 **Alt + S**。
 
+- **截图虚拟按键（0.9.0）**：启动窗口点击“截图虚拟按键”，鼠标点击置顶面板的全屏/区域键即可截图并上传；不依赖实体快捷键，不注入系统按键。截图前暂时收起面板，截图后恢复。它不能屏蔽系统或其他软件的输入监测。Windows 启动窗口还可打开“截图诊断”。
 - **截图**：Alt + S 全屏、Ctrl + Alt + A 区域选框；工作台可开启右键长按 0.6 秒拖动选区，松开发送，Esc 取消。默认选择第一个显示器，可指定 `--monitor`。
 - **题目输入**：导入 PNG/JPEG/WebP、本地裁剪、文字题目和补充条件；不必先复制题干即可分析图片。
 - **OCR**：使用所选视觉模型转录文字，保留段落、选项、代码和公式；与直接分析分开操作。
