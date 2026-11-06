@@ -93,7 +93,9 @@ def test_plain_boxes_and_non_grid_drawing_are_not_matrices():
     assert grid_context(result) == ""
 
 
-def test_work_budget_is_reported():
+def test_work_budget_is_reported(monkeypatch):
+    # A coarse Windows timer can return the same tick throughout this small input.
+    monkeypatch.setattr("screenbridge.grids.time.monotonic", lambda: 100.0)
     result = read_grids(picture([[[1, 0], [0, 1]]]), time_limit=0)
     assert result["limited"] and result["grids"] == []
 

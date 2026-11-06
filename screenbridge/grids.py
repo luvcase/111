@@ -33,7 +33,7 @@ def read_grids(data, time_limit=3.0):
         return sum(pixels[(y + dy) * width + x] for dy in range(size)) / size
 
     for y in range(height - 24):
-        if time.monotonic() - start > time_limit or examined >= 4000:
+        if time.monotonic() - start >= time_limit or examined >= 4000:
             limited = True
             break
         row = pixels[y * width : (y + 1) * width]
