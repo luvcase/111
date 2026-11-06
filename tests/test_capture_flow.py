@@ -7,7 +7,9 @@ own backend tests; here we replay the production shortcut callbacks end to end.
 import heapq
 import json
 import sys
+import threading
 import time
+import traceback
 from types import SimpleNamespace
 
 import httpx
@@ -281,5 +283,14 @@ def test_native_shortcut_to_capture_and_upload(monkeypatch, tmp_path, scenario):
         if scenario.startswith("panel_"):
             assert panels[0].window.visible
             assert status["last_input"].startswith("虚拟按键")
+    except httpx.TimeoutException as exc:
+        frames = sys._current_frames()
+        stacks = "\n".join(
+            thread.name + "\n" + "".join(traceback.format_stack(frames[thread.ident]))
+            for thread in threading.enumerate()
+            if thread.ident in frames
+        )
+        status = status_path.read_text(encoding="utf-8")
+        raise AssertionError(f"Local capture HTTP timed out. Status: {status}\n{stacks}") from exc
     finally:
         runtime.stop()
