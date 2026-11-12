@@ -6,7 +6,26 @@ on:
 permissions:
   contents: write
 jobs:
+  supersede:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      CURRENT_RUN: ${{ github.run_id }}
+    steps:
+      - name: Cancel outdated Mac builds
+        run: |
+          gh api "repos/$GH_REPO/actions/workflows/mac-app.yml/runs?branch=main&status=in_progress" --jq '.workflow_runs[].id' > older-runs.txt
+          while read -r run; do
+            if [ "$run" != "$CURRENT_RUN" ] && [ "$run" -lt "$CURRENT_RUN" ]; then
+              gh run cancel "$run" || true
+            fi
+          done < older-runs.txt
   build:
+    needs: supersede
     runs-on: macos-15
     timeout-minutes: 25
     env:
@@ -28,7 +47,7 @@ jobs:
       - name: Check source
         run: |
           uv run --no-sync ruff check .
-          uv run --no-sync pytest -q --junitxml=build/mac-tests.xml
+          uv run --no-sync python scripts/check_mac_source.py
       - name: Package Apple Silicon app
         run: uv run --no-sync pyinstaller --noconfirm --clean ScreenBridge-mac.spec
       - name: Verify frozen service and bundled Tk
@@ -64,6 +83,9 @@ jobs:
           report = {'source': os.environ['SOURCE_SHA'], 'run': os.environ['RUN_ID'],
                     'artifact_url': os.environ['ARTIFACT_URL'],
                     'smoke': json.loads(p.read_text()) if p.exists() else {'ok': False}}
+          source_check = pathlib.Path('build/mac-source-check.json')
+          if source_check.exists():
+              report['source_check'] = json.loads(source_check.read_text())
           tests = pathlib.Path('build/mac-tests.xml')
           if tests.exists():
               report['tests'] = {'failures': [
