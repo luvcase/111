@@ -1,8 +1,12 @@
 import argparse
 import getpass
+import ipaddress
 import os
+import re
 import secrets
 import socket
+import subprocess
+import sys
 import threading
 import time
 import webbrowser
@@ -19,6 +23,29 @@ from .provider import MODES, Settings
 
 
 def local_ip():
+    if sys.platform == "darwin":
+        # macOS hostname resolution can block startup for a minute on some networks.
+        try:
+            result = subprocess.run(
+                ["/sbin/ifconfig"], capture_output=True, text=True, check=True, timeout=1
+            )
+            for block in re.split(r"\n(?=\S)", result.stdout):
+                if not re.match(r"en\d+:", block) or "status: active" not in block:
+                    continue
+                for value in re.findall(r"(?m)^\s+inet\s+(\S+)", block):
+                    address = ipaddress.ip_address(value)
+                    if not (address.is_loopback or address.is_link_local or address.is_unspecified):
+                        return str(address)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+        # This UDP connect only selects a local route. No data is sent to the TEST-NET address.
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+                probe.settimeout(0.2)
+                probe.connect(("192.0.2.1", 9))
+                return probe.getsockname()[0]
+        except OSError:
+            return "127.0.0.1"
     try:
         addresses = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
         return next(ip[4][0] for ip in addresses if not ip[4][0].startswith("127."))
