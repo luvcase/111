@@ -9,7 +9,16 @@ from pathlib import Path
 output = Path("build/mac-source-check.json")
 output.parent.mkdir(exist_ok=True)
 result = {"ok": False}
-command = [sys.executable, "-m", "pytest", "-vv", "-s", "--junitxml=build/mac-tests.xml"]
+command = [
+    sys.executable,
+    "-c",
+    "import faulthandler,pytest,sys; faulthandler.dump_traceback_later(30,repeat=True); "
+    "sys.exit(pytest.main(sys.argv[1:]))",
+    "-vv",
+    "-s",
+    "-x",
+    "--junitxml=build/mac-tests.xml",
+]
 with Path("build/mac-source.log").open("w", encoding="utf-8") as log:
     try:
         process = subprocess.run(

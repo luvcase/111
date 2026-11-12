@@ -26,6 +26,7 @@ jobs:
           done < older-runs.txt
   build:
     needs: supersede
+    if: always() && (needs.supersede.result == 'success' || needs.supersede.result == 'skipped')
     runs-on: macos-15
     timeout-minutes: 25
     env:

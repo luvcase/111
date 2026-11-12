@@ -15,6 +15,7 @@ KEYBOARD = fourcc("keyb")
 PRESSED = 6
 RELEASED = 9
 NOT_HANDLED = -9874
+EXCLUSIVE = 1
 IDENTIFIERS = itertools.count(1)
 
 
@@ -168,7 +169,7 @@ class CarbonHotkeyAPI:
             flags,
             HotkeyID(SIGNATURE, identifier),
             self.library.GetEventDispatcherTarget(),
-            0,
+            EXCLUSIVE,
             ctypes.byref(reference),
         )
         return error, reference
