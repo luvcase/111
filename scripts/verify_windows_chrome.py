@@ -54,6 +54,8 @@ class WindowsInput:
         self.user32 = ctypes.WinDLL("user32", use_last_error=True)
         self.user32.SendInput.argtypes = [wt.UINT, ctypes.POINTER(Input), ctypes.c_int]
         self.user32.SendInput.restype = wt.UINT
+        self.user32.MapVirtualKeyW.argtypes = [wt.UINT, wt.UINT]
+        self.user32.MapVirtualKeyW.restype = wt.UINT
         self.user32.GetWindowTextW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
         self.user32.GetWindowTextW.restype = ctypes.c_int
         self.user32.SetForegroundWindow.argtypes = [wt.HWND]
@@ -66,8 +68,11 @@ class WindowsInput:
         inputs = (self.Input * len(sequence))()
         for item, (key, release) in zip(inputs, sequence):
             item.type = 1
-            item.payload.keyboard.vk = key
-            item.payload.keyboard.flags = 2 if release else 0
+            # Scan codes give Chrome meaningful event.code values, like physical keys.
+            item.payload.keyboard.scan = self.user32.MapVirtualKeyW(key, 0)
+            if not item.payload.keyboard.scan:
+                raise RuntimeError(f"No scan code for test key {key}")
+            item.payload.keyboard.flags = 8 | (2 if release else 0)
         sent = self.user32.SendInput(len(inputs), inputs, ctypes.sizeof(self.Input))
         if sent != len(inputs):
             raise RuntimeError(f"SendInput failed: {sent}/{len(inputs)}; {ctypes.get_last_error()}")
@@ -145,7 +150,7 @@ def verify(executable, output):
             page.set_content(
                 "<title>" + title + '</title><input id="typing" autofocus>'
                 '<script>window.keys=[]; for (const type of ["keydown","keyup"]) {'
-                "document.addEventListener(type,e=>keys.push({type:e.type,code:e.code,"
+                "document.addEventListener(type,e=>keys.push({type:e.type,code:e.code,key:e.key,"
                 "alt:e.altKey,ctrl:e.ctrlKey}));}</script>"
             )
 
@@ -165,6 +170,8 @@ def verify(executable, output):
             focus()
             inputs.chord(0x42)  # Ordinary B must still reach the input.
             wait_for(page, lambda: page.locator("#typing").input_value() == "b", "normal typing")
+            assert received("KeyB"), "Native test input must produce real Chrome key codes"
+            report["baseline_browser_events"] = page.evaluate("keys")
             report["typing_works"] = True
             report["stage"] = "full_hotkey"
             page.evaluate("keys=[]")
