@@ -1,13 +1,15 @@
 name: Publish Mac Download
 on:
-  push:
-    branches: [main]
-    paths: ['.github/workflows/mac-download.yml']
   workflow_run:
     workflows: ['Build Mac App']
     types: [completed]
     branches: [main]
   workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful Build Mac App run ID
+        required: true
+        type: string
 permissions:
   contents: write
   actions: read
@@ -20,10 +22,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
-      group: mac-download-${{ github.event.workflow_run.id || '39917653551' }}
+      group: mac-download-${{ github.event.workflow_run.id || inputs.run_id }}
       cancel-in-progress: false
     env:
-      SOURCE_RUN: ${{ github.event.workflow_run.id || '39917653551' }}
+      SOURCE_RUN: ${{ github.event.workflow_run.id || inputs.run_id }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
     steps:
@@ -65,7 +67,9 @@ jobs:
           cat > notes.md <<'EOF'
           Apple Silicon Mac test build. Download the ZIP below, extract ScreenBridge.app and move it to Applications. No Python installation is needed.
 
-          This build is not Developer ID signed or notarized. Screen recording and accessibility permissions must be granted on your Mac. The CI checks bundled Tk and the frozen service; real screen capture and hotkeys still require on-device verification.
+          Includes macOS system-registered Option+S and Control+Option+A capture hotkeys, a floating capture keypad and capture diagnostics. Conflicting registrations are reported without taking over another app's registration. This does not hide keyboard input from the OS or guarantee invisibility to Chrome or other programs.
+
+          This build is not Developer ID signed or notarized. Grant screen recording permission on your Mac; optional right-button monitoring also requires accessibility permission. CI checks registration, Carbon event callbacks, bundled Tk and the frozen service. Real physical hotkeys, Chrome behavior and screen capture still require on-device verification.
 
           See the attached Chinese guide for installation and permission steps. No user API keys or personal records are included.
           EOF

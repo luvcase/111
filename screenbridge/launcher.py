@@ -264,10 +264,22 @@ def package_smoke(result_path, native=None):
         native = sys.platform == "win32" if native is None else native
         if native or sys.platform == "darwin":
             root = tk.Tk()
-            root.withdraw()
-            root.update()
-            root.destroy()
-            result["tk_checked"] = True
+            keys = None
+            try:
+                root.withdraw()
+                root.update()
+                if sys.platform == "darwin":
+                    from .macos_hotkeys import MacHotKeys
+
+                    keys = MacHotKeys({"<alt>+s": lambda: None, "<ctrl>+<alt>+a": lambda: None})
+                    keys.start()
+                    assert len(keys.registered) == 2 and not keys.errors, keys.status
+                    result["mac_hotkey_registration_checked"] = True
+                result["tk_checked"] = True
+            finally:
+                if keys:
+                    keys.stop()
+                root.destroy()
         temporary = tempfile.TemporaryDirectory(prefix="screenbridge-package-")
         controller = RuntimeController(Path(temporary.name), demo=True, port=0)
         checkpoint("starting_runtime")
@@ -348,7 +360,7 @@ def show_app(directory):
         messagebox.showinfo("ScreenBridge", "软件已经运行，请打开已有的 ScreenBridge 窗口。")
         return 0
     root = tk.Tk()
-    root.title("ScreenBridge 0.9.1")
+    root.title("ScreenBridge 0.9.2")
     root.geometry("560x550" if sys.platform == "darwin" else "540x490")
     root.minsize(540, 550 if sys.platform == "darwin" else 490)
     root.configure(background="#f3f7f5")
@@ -422,7 +434,7 @@ def show_app(directory):
             saved = json.loads((directory / "desktop-status.json").read_text(encoding="utf-8"))
             updated = time.strftime("%m-%d %H:%M:%S", time.localtime(saved["updated_at"]))
             report = (
-                f"应用版本：0.9.1\n截图客户端最后更新：{updated}\n"
+                f"应用版本：0.9.2\n截图客户端最后更新：{updated}\n"
                 f"快捷键监听：{saved.get('hotkeys', '未知')}\n"
                 f"最后收到的快捷键：{saved.get('last_shortcut', '尚未收到')}\n"
                 f"最近的虚拟按键：{saved.get('last_input', '尚未收到')}\n"
@@ -510,7 +522,8 @@ def show_app(directory):
                 messagebox.showinfo(
                     "Mac 截图权限",
                     "请在系统设置中为 ScreenBridge 开启屏幕录制权限；"
-                    "全局快捷键及鼠标监听还需辅助功能权限，系统若询问输入监控也请授权。"
+                    "右键长按监听还需辅助功能权限，系统若询问输入监控也请授权。"
+                    "系统截图快捷键单独注册，可在截图诊断中查看注册是否成功。"
                     "完成后退出并重新打开软件。未授权时仍可导入本地题图。\n\n"
                     f"当前检测结果：{permission_status()}",
                 )

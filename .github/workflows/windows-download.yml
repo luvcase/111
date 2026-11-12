@@ -71,7 +71,7 @@ jobs:
           tag="windows-build-$SOURCE_RUN"
           if ! gh release view "$tag" > /dev/null 2>&1; then
             gh release create "$tag" --target "$SOURCE_SHA" --prerelease \
-              --title 'ScreenBridge 0.9.1 · Windows 64 位测试版' --notes-file notes.md \
+              --title 'ScreenBridge · Windows 64 位测试版' --notes-file notes.md \
               download/ScreenBridge-Windows-x64.zip download/使用说明.txt download/SHA256SUMS.txt
           fi
           gh release view "$tag" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"

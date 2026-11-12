@@ -17,6 +17,7 @@ subprocess.run(command, check=True, timeout=90)
 report = json.loads(result.read_text())
 assert report["ok"] and report["frozen"]
 assert report["tk_checked"]
+assert report["mac_hotkey_registration_checked"]
 assert platform.machine() == "arm64"
 report.update(architecture="arm64", permissions_and_capture_verified=False)
 result.write_text(json.dumps(report, ensure_ascii=False, indent=2))

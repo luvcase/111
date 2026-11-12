@@ -28,7 +28,7 @@ jobs:
       - name: Check source
         run: |
           uv run --no-sync ruff check .
-          uv run --no-sync pytest -q
+          uv run --no-sync pytest -q --junitxml=build/mac-tests.xml
       - name: Package Apple Silicon app
         run: uv run --no-sync pyinstaller --noconfirm --clean ScreenBridge-mac.spec
       - name: Verify frozen service and bundled Tk
@@ -59,11 +59,17 @@ jobs:
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           python - <<'PY'
-          import json, os, pathlib, subprocess
+          import json, os, pathlib, subprocess, xml.etree.ElementTree as ET
           p = pathlib.Path('build/mac-smoke.json')
           report = {'source': os.environ['SOURCE_SHA'], 'run': os.environ['RUN_ID'],
                     'artifact_url': os.environ['ARTIFACT_URL'],
                     'smoke': json.loads(p.read_text()) if p.exists() else {'ok': False}}
+          tests = pathlib.Path('build/mac-tests.xml')
+          if tests.exists():
+              report['tests'] = {'failures': [
+                  {'name': case.attrib.get('name'), 'error': error.text}
+                  for case in ET.parse(tests).iter('testcase')
+                  for error in case if error.tag in {'failure', 'error'}]}
           pathlib.Path('build').mkdir(exist_ok=True)
           pathlib.Path('build/mac-build-report.json').write_text(json.dumps(report))
           subprocess.run(['git', 'config', 'user.name', 'github-actions[bot]'], check=True)

@@ -1,4 +1,4 @@
-ScreenBridge Windows 应用 0.9.1
+ScreenBridge Windows 应用 0.9.2
 
 0.9.1 实体截图快捷键：Windows 使用系统快捷键注册，运行期间由 ScreenBridge 接管 Alt+S 和 Ctrl+Alt+A，Chrome 等前台程序不再执行对应的字母键按下操作。Alt、Ctrl 等修饰键以及部分松键事件仍可能被前台程序感知；这不是输入隐身或屏蔽监测。普通文字输入及其他快捷键不受影响；退出软件后恢复。
 若其他软件已占用快捷键，启动窗口“截图诊断”会显示注册失败与 Windows 错误码；本软件不强行抢占。Esc 仅取消当前选框，不作全局独占。

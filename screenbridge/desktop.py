@@ -110,9 +110,9 @@ def create_key_listener(keyboard, hotkeys):
         # Escape belongs to the focused region selector, not to every app globally.
         return WindowsHotKeys({key: action for key, action in hotkeys.items() if key != "<esc>"})
     if sys.platform == "darwin":
-        from .macos import hotkey_listener
+        from .macos_hotkeys import MacHotKeys
 
-        return hotkey_listener(keyboard, hotkeys)
+        return MacHotKeys({key: action for key, action in hotkeys.items() if key != "<esc>"})
     return keyboard.GlobalHotKeys(hotkeys)
 
 
@@ -129,12 +129,15 @@ def run_desktop(
 
     from PIL import ImageTk
 
-    listen = True
+    listen_mouse = True
+    keyboard = mouse = None
     if sys.platform == "darwin":
         from .macos import permission_status
 
-        listen = permission_status()["accessibility"] is True
-    if listen:
+        listen_mouse = permission_status()["accessibility"] is True
+        if listen_mouse:
+            from pynput import mouse
+    else:
         from pynput import keyboard, mouse
 
     enable_dpi_awareness()
@@ -477,23 +480,25 @@ def run_desktop(
         root.after(80, pump)
 
     key_listener = mouse_listener = None
-    if listen:
-        hotkeys = shortcut_bindings(hotkey, region_hotkey, submit_command, diagnose)
-        hotkeys["<esc>"] = lambda: submit_command("cancel")
+    hotkeys = shortcut_bindings(hotkey, region_hotkey, submit_command, diagnose)
+    hotkeys["<esc>"] = lambda: submit_command("cancel")
+    try:
+        key_listener = create_key_listener(keyboard, hotkeys)
+        key_listener.start()
+        diagnose(hotkeys=getattr(key_listener, "status", "监听已启动，请查看最后收到的快捷键"))
+    except Exception as exc:
+        if key_listener:
+            key_listener.stop()
+        key_listener = None
+        diagnose(hotkeys="快捷键启动失败：" + str(exc)[:300])
+    if listen_mouse:
         try:
-            key_listener = create_key_listener(keyboard, hotkeys)
-            key_listener.start()
-            diagnose(hotkeys=getattr(key_listener, "status", "监听已启动，请查看最后收到的快捷键"))
+            mouse_listener = mouse.Listener(on_click=on_click)
+            mouse_listener.start()
         except Exception as exc:
-            if key_listener:
-                key_listener.stop()
-            key_listener = None
-            diagnose(hotkeys="快捷键启动失败：" + str(exc)[:300])
-        mouse_listener = mouse.Listener(on_click=on_click)
-        mouse_listener.start()
+            diagnose(mouse="右键监听启动失败：" + str(exc)[:300])
     else:
-        print("未获得辅助功能权限：全局快捷键和右键监听未开启，授权后请重启软件。")
-        diagnose(hotkeys="启动时未获辅助功能权限，监听未开启；请退出整个软件后重新打开")
+        diagnose(mouse="未获辅助功能权限，右键长按未开启；系统截图快捷键单独注册")
     threading.Thread(target=poll_server, daemon=True).start()
     print(f"全屏截图：{hotkey}；区域截图：{region_hotkey}；右键长按在工作台中开启。")
     signal.signal(signal.SIGINT, lambda *_: stopped.set())
