@@ -39,6 +39,8 @@ jobs:
           if (-not $result.ok -or -not $result.frozen -or -not $result.native_checked) {
             throw 'Executable, embedded UI, service and native screenshot were not all verified'
           }
+      - name: Verify Windows hotkeys with foreground Chrome
+        run: uv run --no-sync python scripts/verify_windows_chrome.py --executable dist/ScreenBridge/ScreenBridge.exe --result-path build/windows-chrome.json
       - name: Add user guide
         shell: pwsh
         run: Copy-Item 'docs/Windows应用使用说明.txt' 'dist/ScreenBridge/使用说明.txt'
@@ -76,7 +78,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-app-diagnostics
-          path: build/packaged-smoke.json
+          path: |
+            build/packaged-smoke.json
+            build/windows-chrome.json
           if-no-files-found: ignore
       - name: Report smoke diagnostics
         if: failure()
@@ -103,6 +107,9 @@ jobs:
             run = '${{ github.run_id }}'
             artifact_url = '${{ steps.application.outputs.artifact-url }}'
             smoke = $smoke
+          }
+          if (Test-Path 'build/windows-chrome.json') {
+            $report.chrome = Get-Content 'build/windows-chrome.json' -Raw -Encoding utf8 | ConvertFrom-Json
           }
           if (Test-Path 'build/test-results.xml') {
             [xml]$tests = Get-Content 'build/test-results.xml' -Raw -Encoding utf8

@@ -32,8 +32,8 @@ application = BUNDLE(
     collection, name='ScreenBridge.app', icon=None,
     bundle_identifier='io.github.luvcase.screenbridge',
     info_plist={
-        'CFBundleShortVersionString': '0.9.0',
-        'CFBundleVersion': '0.9.0',
+        'CFBundleShortVersionString': '0.9.1',
+        'CFBundleVersion': '0.9.1',
         'LSMinimumSystemVersion': '13.0',
         'NSHighResolutionCapable': True,
         'NSLocalNetworkUsageDescription': '连接同一局域网内的手机以同步题目复盘。',

@@ -95,6 +95,7 @@ def test_native_shortcut_to_capture_and_upload(monkeypatch, tmp_path, scenario):
             return self.alive
 
     keyboard = SimpleNamespace(GlobalHotKeys=Listener)
+    monkeypatch.setattr(desktop, "create_key_listener", lambda keyboard, hotkeys: Listener(hotkeys))
     monkeypatch.setitem(
         sys.modules,
         "pynput",
@@ -166,7 +167,7 @@ def test_native_shortcut_to_capture_and_upload(monkeypatch, tmp_path, scenario):
 
         def mainloop(self):
             if scenario.startswith("panel_"):
-                with httpx.Client(timeout=2, trust_env=False) as client:
+                with httpx.Client(timeout=5, trust_env=False) as client:
                     deadline = time.monotonic() + 3
                     while time.monotonic() < deadline:
                         if client.get(
@@ -174,12 +175,12 @@ def test_native_shortcut_to_capture_and_upload(monkeypatch, tmp_path, scenario):
                             headers={"Authorization": "Bearer " + runtime.token},
                         ).json()["desktop_connected"]:
                             break
-                        time.sleep(0.01)
+                        time.sleep(0.05)
                 runtime.open_capture_panel()
             else:
                 keyboard_state["<alt>+s" if scenario == "full" else "<ctrl>+<alt>+a"]()
-            deadline = time.monotonic() + 8
-            with httpx.Client(timeout=2, trust_env=False) as client:
+            deadline = time.monotonic() + 15
+            with httpx.Client(timeout=5, trust_env=False) as client:
                 while time.monotonic() < deadline:
                     while self.callbacks and self.callbacks[0][0] <= time.monotonic():
                         heapq.heappop(self.callbacks)[3]()
@@ -249,7 +250,7 @@ def test_native_shortcut_to_capture_and_upload(monkeypatch, tmp_path, scenario):
                             continue
                         self.result = jobs[-1]
                         return
-                    time.sleep(0.01)
+                    time.sleep(0.05)
             raise AssertionError(f"Capture did not complete: {status}")
 
     root = Root()

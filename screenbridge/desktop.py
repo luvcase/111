@@ -103,6 +103,19 @@ def capture_action(command, full_capture, region_capture):
     raise ValueError(f"未知截图指令：{str(kind)[:40]}")
 
 
+def create_key_listener(keyboard, hotkeys):
+    if sys.platform == "win32":
+        from .windows import WindowsHotKeys
+
+        # Escape belongs to the focused region selector, not to every app globally.
+        return WindowsHotKeys({key: action for key, action in hotkeys.items() if key != "<esc>"})
+    if sys.platform == "darwin":
+        from .macos import hotkey_listener
+
+        return hotkey_listener(keyboard, hotkeys)
+    return keyboard.GlobalHotKeys(hotkeys)
+
+
 def run_desktop(
     server,
     token,
@@ -431,9 +444,11 @@ def run_desktop(
             if alive != listener_health["alive"]:
                 listener_health["alive"] = alive
                 diagnose(
-                    hotkeys="监听线程运行中（请查看是否收到快捷键）"
+                    hotkeys=getattr(
+                        key_listener, "status", "监听线程运行中（请查看是否收到快捷键）"
+                    )
                     if alive
-                    else "监听线程已停止；请检查辅助功能、输入监控权限并退出重开软件"
+                    else getattr(key_listener, "status", "监听线程已停止，请退出重开软件并检查权限")
                 )
         try:
             while not ui_events.empty():
@@ -465,16 +480,17 @@ def run_desktop(
     if listen:
         hotkeys = shortcut_bindings(hotkey, region_hotkey, submit_command, diagnose)
         hotkeys["<esc>"] = lambda: submit_command("cancel")
-        if sys.platform == "darwin":
-            from .macos import hotkey_listener
-
-            key_listener = hotkey_listener(keyboard, hotkeys)
-        else:
-            key_listener = keyboard.GlobalHotKeys(hotkeys)
+        try:
+            key_listener = create_key_listener(keyboard, hotkeys)
+            key_listener.start()
+            diagnose(hotkeys=getattr(key_listener, "status", "监听已启动，请查看最后收到的快捷键"))
+        except Exception as exc:
+            if key_listener:
+                key_listener.stop()
+            key_listener = None
+            diagnose(hotkeys="快捷键启动失败：" + str(exc)[:300])
         mouse_listener = mouse.Listener(on_click=on_click)
-        key_listener.start()
         mouse_listener.start()
-        diagnose(hotkeys="监听已启动（事件是否送达请查看最后收到的快捷键）")
     else:
         print("未获得辅助功能权限：全局快捷键和右键监听未开启，授权后请重启软件。")
         diagnose(hotkeys="启动时未获辅助功能权限，监听未开启；请退出整个软件后重新打开")

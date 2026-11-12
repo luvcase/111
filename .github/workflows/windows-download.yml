@@ -64,12 +64,14 @@ jobs:
 
           Includes a mouse-operated capture keypad (截图虚拟按键) and capture diagnostics in the launcher. The keypad calls capture directly without injecting system keyboard events. It does not block input monitoring by other programs.
 
-          CI checks source tests, real Tk controls, the frozen app and native screenshot upload in demo mode. Actual AI accuracy is not verified. This build is unsigned. No user API keys or personal records are included.
+          Windows now registers Alt+S and Ctrl+Alt+A as system hotkeys. When registration succeeds, the foreground Chrome page does not receive the primary letter keydown for these combinations. Modifiers and some keyup events can still be visible. Conflicts appear in capture diagnostics; the app does not override another app's registration. Registrations are released on exit.
+
+          CI checks source tests, real Tk controls, the frozen app, native screenshot upload in demo mode, and native input routing with foreground Chrome. Actual AI accuracy is not verified. This build is unsigned. No user API keys or personal records are included.
           EOF
           tag="windows-build-$SOURCE_RUN"
           if ! gh release view "$tag" > /dev/null 2>&1; then
             gh release create "$tag" --target "$SOURCE_SHA" --prerelease \
-              --title 'ScreenBridge 0.9.0 · Windows 64 位测试版' --notes-file notes.md \
+              --title 'ScreenBridge 0.9.1 · Windows 64 位测试版' --notes-file notes.md \
               download/ScreenBridge-Windows-x64.zip download/使用说明.txt download/SHA256SUMS.txt
           fi
           gh release view "$tag" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"

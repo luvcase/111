@@ -348,7 +348,7 @@ def show_app(directory):
         messagebox.showinfo("ScreenBridge", "软件已经运行，请打开已有的 ScreenBridge 窗口。")
         return 0
     root = tk.Tk()
-    root.title("ScreenBridge 0.9.0")
+    root.title("ScreenBridge 0.9.1")
     root.geometry("560x550" if sys.platform == "darwin" else "540x490")
     root.minsize(540, 550 if sys.platform == "darwin" else 490)
     root.configure(background="#f3f7f5")
@@ -422,7 +422,7 @@ def show_app(directory):
             saved = json.loads((directory / "desktop-status.json").read_text(encoding="utf-8"))
             updated = time.strftime("%m-%d %H:%M:%S", time.localtime(saved["updated_at"]))
             report = (
-                f"应用版本：0.9.0\n截图客户端最后更新：{updated}\n"
+                f"应用版本：0.9.1\n截图客户端最后更新：{updated}\n"
                 f"快捷键监听：{saved.get('hotkeys', '未知')}\n"
                 f"最后收到的快捷键：{saved.get('last_shortcut', '尚未收到')}\n"
                 f"最近的虚拟按键：{saved.get('last_input', '尚未收到')}\n"
